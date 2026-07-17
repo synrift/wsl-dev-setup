@@ -60,7 +60,8 @@ install_system_packages() {
     zoxide \
     zsh \
     zsh-autosuggestions \
-    zsh-syntax-highlighting
+    zsh-syntax-highlighting \
+    bubblewrap
 }
 
 install_starship() {
