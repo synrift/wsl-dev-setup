@@ -6,19 +6,32 @@ This script installs and configures:
 
 - zsh
 - unzip
+- Bubblewrap
+- build-essential
+- ca-certificates
+- curl
+- Git
+- jq
+- OpenSSH client
+- pkg-config
+- Python 3
+- ripgrep
 - zoxide
 - zsh-autosuggestions
 - zsh-syntax-highlighting
 - Starship prompt
 - fnm
 - Node.js LTS
-- latest npm
-- latest pnpm
+- npm bundled with Node.js
+- Corepack
+- Corepack-managed pnpm
 - Git global config
 - ed25519 SSH key
 - Docker Engine
 - Docker Buildx plugin
 - Docker Compose plugin
+- Bubblewrap AppArmor profile when Ubuntu enables the unprivileged user
+  namespace restriction
 
 ## Usage
 
@@ -61,6 +74,46 @@ To run Docker's `hello-world` test too:
 RUN_DOCKER_HELLO_WORLD=1 GIT_NAME="your-name" GIT_EMAIL="you@example.com" bash -c "$(curl -fsSL https://raw.githubusercontent.com/synrift/wsl-dev-setup/main/install.sh)"
 ```
 
+## pnpm With Corepack
+
+The script keeps the npm version bundled with Node.js and uses Corepack to
+manage pnpm. Outside a project, Corepack provides the latest pnpm version that
+was selected during installation.
+
+For a new project, first create `package.json`, then let Corepack select and pin
+the current pnpm version:
+
+```bash
+npm init -y
+corepack use pnpm@latest
+```
+
+`corepack use` writes an exact pnpm version to the `packageManager` field in
+`package.json` and runs the initial install. Commit `package.json` and
+`pnpm-lock.yaml`. After that, use pnpm normally:
+
+```bash
+pnpm install
+pnpm add <package>
+pnpm run dev
+```
+
+When another machine or a fresh WSL installation runs `pnpm` in that project,
+Corepack reads `packageManager` and automatically uses the pinned pnpm version.
+
+To update pnpm within the current major version for a project:
+
+```bash
+corepack up
+```
+
+To intentionally move a project to the latest pnpm release, including a new
+major version:
+
+```bash
+corepack use pnpm@latest
+```
+
 ## After Installation
 
 After the script finishes, exit Ubuntu and run this in PowerShell:
@@ -77,7 +130,13 @@ This reloads the default zsh shell and applies Docker group membership.
 
 - Run the script as your normal WSL user, not as root.
 - The script may ask for your sudo password.
+- On Ubuntu 24.04, the script checks whether AppArmor is actively restricting
+  unprivileged user namespaces. Only when required, it installs
+  `apparmor-profiles` and `apparmor-utils`, copies the Bubblewrap profile into
+  `/etc/apparmor.d`, and loads it. If AppArmor or that restriction is disabled,
+  the step is skipped.
+- The script updates `~/.zshenv` so Codex Desktop and other non-interactive zsh
+  commands can find the default fnm-managed Node.js version.
 - The script updates `~/.zshrc` inside a managed block named `codex-wsl-dev-env`.
 - Re-running the script replaces only that managed block and keeps your other `~/.zshrc` content.
 - The SSH public key is printed at the end so you can add it to GitHub.
-

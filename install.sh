@@ -56,12 +56,65 @@ install_system_packages() {
   sudo apt update
   sudo apt upgrade -y
   sudo apt install -y \
+    build-essential \
+    ca-certificates \
+    curl \
+    git \
+    jq \
+    openssh-client \
+    pkg-config \
+    python3 \
+    ripgrep \
     unzip \
     zoxide \
     zsh \
     zsh-autosuggestions \
     zsh-syntax-highlighting \
     bubblewrap
+}
+
+configure_bubblewrap_apparmor() {
+  log "Checking AppArmor support for Bubblewrap"
+
+  local apparmor_enabled
+  local userns_restricted
+  local profile_source
+  local profile_target
+
+  apparmor_enabled="$(
+    cat /sys/module/apparmor/parameters/enabled 2>/dev/null || true
+  )"
+  userns_restricted="$(
+    cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns 2>/dev/null || true
+  )"
+
+  if [[ "$apparmor_enabled" != "Y" ]]; then
+    log "AppArmor is not enabled; skipping Bubblewrap profile"
+    return
+  fi
+
+  if [[ "$userns_restricted" != "1" ]]; then
+    log "AppArmor user namespace restriction is not active; skipping Bubblewrap profile"
+    return
+  fi
+
+  log "Installing the Bubblewrap AppArmor profile"
+  sudo apt install -y apparmor-profiles apparmor-utils || \
+    die "Failed to install Bubblewrap AppArmor dependencies."
+
+  profile_source="/usr/share/apparmor/extra-profiles/bwrap-userns-restrict"
+  profile_target="/etc/apparmor.d/bwrap-userns-restrict"
+
+  if [[ ! -f "$profile_source" ]]; then
+    die "Bubblewrap AppArmor profile was not found at $profile_source."
+  fi
+
+  sudo install -m 0644 "$profile_source" "$profile_target" || \
+    die "Failed to install the Bubblewrap AppArmor profile."
+  sudo apparmor_parser -r "$profile_target" || \
+    die "Failed to load the Bubblewrap AppArmor profile."
+
+  log "Bubblewrap AppArmor profile loaded"
 }
 
 install_starship() {
@@ -79,7 +132,7 @@ install_starship() {
 }
 
 install_fnm_and_node() {
-  log "Installing fnm, Node.js LTS, latest npm, and latest pnpm"
+  log "Installing fnm, Node.js LTS, Corepack, and pnpm"
 
   if ! command_exists fnm && [[ ! -x "$HOME/.local/share/fnm/fnm" ]]; then
     curl -fsSL https://fnm.vercel.app/install | bash
@@ -100,8 +153,39 @@ install_fnm_and_node() {
   fnm default lts-latest
   fnm use lts-latest
 
-  npm i -g npm@latest
-  npm i -g pnpm@latest
+  # Keep the npm version bundled with Node.js. Corepack selects the pnpm
+  # version declared by each project's packageManager field.
+  npm install --global corepack@latest
+  corepack enable pnpm
+  corepack install --global pnpm@latest
+}
+
+configure_zshenv() {
+  log "Configuring ~/.zshenv"
+  local zshenv="$HOME/.zshenv"
+  local begin="# >>> codex-wsl-dev-env >>>"
+  local end="# <<< codex-wsl-dev-env <<<"
+  local tmp
+  tmp="$(mktemp)"
+
+  touch "$zshenv"
+
+  awk -v begin="$begin" -v end="$end" '
+    $0 == begin { skip = 1; next }
+    $0 == end { skip = 0; next }
+    skip != 1 { print }
+  ' "$zshenv" > "$tmp"
+
+  cat >> "$tmp" <<'EOF'
+
+# >>> codex-wsl-dev-env >>>
+# Keep the default fnm-managed Node.js available to non-interactive shells,
+# including commands launched by Codex Desktop in WSL.
+export PATH="$HOME/.local/share/fnm/aliases/default/bin:$HOME/.local/bin:$HOME/.local/share/fnm:$PATH"
+# <<< codex-wsl-dev-env <<<
+EOF
+
+  mv "$tmp" "$zshenv"
 }
 
 configure_zshrc() {
@@ -126,7 +210,7 @@ configure_zshrc() {
 autoload -Uz compinit
 compinit
 
-export PATH="$HOME/.local/bin:$HOME/.local/share/fnm:$PATH"
+export PATH="$HOME/.local/share/fnm/aliases/default/bin:$HOME/.local/bin:$HOME/.local/share/fnm:$PATH"
 
 if command -v fnm >/dev/null 2>&1; then
   eval "$(fnm env --use-on-cd --shell zsh)"
@@ -270,12 +354,13 @@ main() {
   install_system_packages
   install_starship
   install_fnm_and_node
+  configure_zshenv
   configure_zshrc
   set_default_shell_to_zsh
   configure_git_and_ssh
   install_docker
+  configure_bubblewrap_apparmor
   print_next_steps
 }
 
 main "$@"
-
