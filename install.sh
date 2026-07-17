@@ -181,7 +181,14 @@ configure_zshenv() {
 # >>> codex-wsl-dev-env >>>
 # Keep the default fnm-managed Node.js available to non-interactive shells,
 # including commands launched by Codex Desktop in WSL.
-export PATH="$HOME/.local/share/fnm/aliases/default/bin:$HOME/.local/bin:$HOME/.local/share/fnm:$PATH"
+typeset -U path PATH
+path=(
+  "$HOME/.local/share/fnm/aliases/default/bin"
+  "$HOME/.local/bin"
+  "$HOME/.local/share/fnm"
+  $path
+)
+export PATH
 # <<< codex-wsl-dev-env <<<
 EOF
 
@@ -209,8 +216,6 @@ configure_zshrc() {
 # >>> codex-wsl-dev-env >>>
 autoload -Uz compinit
 compinit
-
-export PATH="$HOME/.local/share/fnm/aliases/default/bin:$HOME/.local/bin:$HOME/.local/share/fnm:$PATH"
 
 if command -v fnm >/dev/null 2>&1; then
   eval "$(fnm env --use-on-cd --shell zsh)"
