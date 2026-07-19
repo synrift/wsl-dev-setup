@@ -9,6 +9,11 @@ GIT_NAME="${GIT_NAME:-your-name}"
 GIT_EMAIL="${GIT_EMAIL:-you@example.com}"
 RUN_DOCKER_HELLO_WORLD="${RUN_DOCKER_HELLO_WORLD:-0}"
 
+# Keep Linux tools on the WSL filesystem from the beginning of the install.
+# Windows passes TEMP and TMP into WSL, but TMPDIR takes precedence for Node.js
+# and other Unix tools without breaking Windows executables invoked via WSL.
+export TMPDIR=/tmp
+
 log() {
   printf '\n\033[1;36m==> %s\033[0m\n' "$*"
 }
@@ -189,6 +194,10 @@ path=(
   $path
 )
 export PATH
+
+# Use WSL's native Linux temporary directory for Node.js and Unix tooling.
+# Leave TEMP and TMP unchanged for compatibility with Windows executables.
+export TMPDIR=/tmp
 # <<< codex-wsl-dev-env <<<
 EOF
 

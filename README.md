@@ -32,6 +32,7 @@ This script installs and configures:
 - Docker Compose plugin
 - Bubblewrap AppArmor profile when Ubuntu enables the unprivileged user
   namespace restriction
+- WSL-native `TMPDIR=/tmp` for Node.js and other Unix development tools
 
 ## Usage
 
@@ -136,7 +137,13 @@ This reloads the default zsh shell and applies Docker group membership.
   `/etc/apparmor.d`, and loads it. If AppArmor or that restriction is disabled,
   the step is skipped.
 - The script updates `~/.zshenv` so Codex Desktop and other non-interactive zsh
-  commands can find the default fnm-managed Node.js version.
+  commands can find the default fnm-managed Node.js version. It also exports
+  `TMPDIR=/tmp`, preventing Node.js and Unix tools from using the Windows
+  `/mnt/c/.../Temp` directory inherited through `TEMP` and `TMP`.
+- `TMPDIR` is also exported at the beginning of the installer, so installation
+  steps use WSL's Linux temporary directory before `~/.zshenv` is created.
+  Windows-provided `TEMP` and `TMP` remain unchanged for compatibility with
+  Windows executables invoked from WSL.
 - The script updates `~/.zshrc` inside a managed block named `codex-wsl-dev-env`.
 - Re-running the script replaces only that managed block and keeps your other `~/.zshrc` content.
 - The SSH public key is printed at the end so you can add it to GitHub.
