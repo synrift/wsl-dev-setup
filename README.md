@@ -33,6 +33,7 @@ This script installs and configures:
 - Bubblewrap AppArmor profile when Ubuntu enables the unprivileged user
   namespace restriction
 - WSL-native `TMPDIR=/tmp` for Node.js and other Unix development tools
+- WSL-native `COREPACK_HOME=~/.cache/node/corepack` for Corepack and pnpm
 
 ## Usage
 
@@ -67,7 +68,8 @@ GIT_EMAIL="you@example.com"
 
 ## Optional Docker Test
 
-By default, the script installs Docker and shows the Docker Compose version, but it does not run `hello-world`.
+By default, the script installs Docker, starts and verifies the Docker daemon,
+and shows the Docker Compose version, but it does not run `hello-world`.
 
 To run Docker's `hello-world` test too:
 
@@ -80,6 +82,17 @@ RUN_DOCKER_HELLO_WORLD=1 GIT_NAME="your-name" GIT_EMAIL="you@example.com" bash -
 The script keeps the npm version bundled with Node.js and uses Corepack to
 manage pnpm. Outside a project, Corepack provides the latest pnpm version that
 was selected during installation.
+
+Windows environment variables such as `LOCALAPPDATA` are inherited by WSL.
+Corepack may otherwise select a cache below `/mnt/c/Users/.../AppData/Local`,
+which can fail in non-interactive tools such as Codex Desktop. The installer
+exports the following value both during installation and from `~/.zshenv`:
+
+```bash
+export COREPACK_HOME="$HOME/.cache/node/corepack"
+```
+
+This keeps Corepack and its downloaded pnpm versions on WSL's Linux filesystem.
 
 For a new project, first create `package.json`, then let Corepack select and pin
 the current pnpm version:
@@ -138,12 +151,13 @@ This reloads the default zsh shell and applies Docker group membership.
   the step is skipped.
 - The script updates `~/.zshenv` so Codex Desktop and other non-interactive zsh
   commands can find the default fnm-managed Node.js version. It also exports
-  `TMPDIR=/tmp`, preventing Node.js and Unix tools from using the Windows
-  `/mnt/c/.../Temp` directory inherited through `TEMP` and `TMP`.
-- `TMPDIR` is also exported at the beginning of the installer, so installation
-  steps use WSL's Linux temporary directory before `~/.zshenv` is created.
-  Windows-provided `TEMP` and `TMP` remain unchanged for compatibility with
-  Windows executables invoked from WSL.
+  `TMPDIR=/tmp` and `COREPACK_HOME="$HOME/.cache/node/corepack"`, preventing
+  Node.js, Unix tools, and Corepack from using Windows `/mnt/c/...` paths
+  inherited through `TEMP`, `TMP`, and `LOCALAPPDATA`.
+- `TMPDIR` and `COREPACK_HOME` are also exported at the beginning of the
+  installer, so installation steps use WSL's Linux filesystem before
+  `~/.zshenv` is created. Windows-provided `TEMP`, `TMP`, and `LOCALAPPDATA`
+  remain unchanged for compatibility with Windows executables invoked from WSL.
 - The script updates `~/.zshrc` inside a managed block named `codex-wsl-dev-env`.
 - Re-running the script replaces only that managed block and keeps your other `~/.zshrc` content.
 - The SSH public key is printed at the end so you can add it to GitHub.

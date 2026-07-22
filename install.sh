@@ -14,6 +14,11 @@ RUN_DOCKER_HELLO_WORLD="${RUN_DOCKER_HELLO_WORLD:-0}"
 # and other Unix tools without breaking Windows executables invoked via WSL.
 export TMPDIR=/tmp
 
+# Windows also passes LOCALAPPDATA into WSL. Corepack considers that variable
+# when selecting its cache and can otherwise try to use a /mnt/c/... path.
+# Keep Corepack and its package-manager downloads on the Linux filesystem.
+export COREPACK_HOME="$HOME/.cache/node/corepack"
+
 log() {
   printf '\n\033[1;36m==> %s\033[0m\n' "$*"
 }
@@ -130,7 +135,7 @@ install_starship() {
     log "Starship already exists; running installer to keep it current"
   fi
 
-  curl -sS https://starship.rs/install.sh | sh -s -- -y -b "$HOME/.local/bin"
+  curl -fsSL https://starship.rs/install.sh | sh -s -- -y -b "$HOME/.local/bin"
 
   mkdir -p "$HOME/.config"
   "$HOME/.local/bin/starship" preset pastel-powerline -o "$HOME/.config/starship.toml" >/dev/null
@@ -138,6 +143,8 @@ install_starship() {
 
 install_fnm_and_node() {
   log "Installing fnm, Node.js LTS, Corepack, and pnpm"
+
+  mkdir -p "$COREPACK_HOME"
 
   if ! command_exists fnm && [[ ! -x "$HOME/.local/share/fnm/fnm" ]]; then
     curl -fsSL https://fnm.vercel.app/install | bash
@@ -198,6 +205,10 @@ export PATH
 # Use WSL's native Linux temporary directory for Node.js and Unix tooling.
 # Leave TEMP and TMP unchanged for compatibility with Windows executables.
 export TMPDIR=/tmp
+
+# Prevent Windows LOCALAPPDATA inherited by WSL from redirecting Corepack's
+# package-manager cache to /mnt/c. Keep it on the Linux filesystem instead.
+export COREPACK_HOME="$HOME/.cache/node/corepack"
 # <<< codex-wsl-dev-env <<<
 EOF
 
@@ -326,16 +337,21 @@ EOF
   sudo apt install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 
   if command_exists systemctl && systemctl list-unit-files docker.service >/dev/null 2>&1; then
-    sudo systemctl enable --now docker || warn "Could not start Docker with systemctl. You may need WSL systemd enabled."
+    if ! sudo systemctl enable --now docker; then
+      warn "Could not start Docker with systemctl; trying service."
+      sudo service docker start || die "Failed to start Docker."
+    fi
   else
-    sudo service docker start || warn "Could not start Docker with service."
+    sudo service docker start || die "Failed to start Docker."
   fi
+
+  sudo docker info >/dev/null || die "Docker daemon is not available."
 
   if getent group docker >/dev/null; then
     sudo usermod -aG docker "$USER"
   fi
 
-  docker compose version || true
+  docker compose version || die "Docker Compose plugin is not available."
 
   if [[ "$RUN_DOCKER_HELLO_WORLD" == "1" ]]; then
     sudo docker run hello-world
