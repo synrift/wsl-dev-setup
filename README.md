@@ -25,6 +25,8 @@ This script installs and configures:
 - npm bundled with Node.js
 - Corepack
 - Corepack-managed pnpm
+- Playwright CLI
+- Playwright-managed Chromium
 - Git global config
 - ed25519 SSH key
 - Docker Engine
@@ -34,6 +36,7 @@ This script installs and configures:
   namespace restriction
 - WSL-native `TMPDIR=/tmp` for Node.js and other Unix development tools
 - WSL-native `COREPACK_HOME=~/.cache/node/corepack` for Corepack and pnpm
+- Playwright-managed Chromium as the default via `PLAYWRIGHT_MCP_BROWSER`
 
 ## Usage
 
@@ -128,6 +131,20 @@ major version:
 corepack use pnpm@latest
 ```
 
+## Playwright
+
+The script installs the official Playwright coding-agent CLI globally with the
+fnm-managed npm, then installs Playwright-managed Chromium and Chromium's
+official Ubuntu dependencies.
+
+The global CLI is for AI and browser automation. Chromium is preinstalled and
+set as the default through `PLAYWRIGHT_MCP_BROWSER=chromium` in `~/.zshenv`.
+Playwright installs Linux system dependencies as part of the Chromium step.
+Browser binaries normally live under `~/.cache/ms-playwright`.
+
+Applications should keep `@playwright/test` project-local rather than installing
+it globally.
+
 ## After Installation
 
 After the script finishes, exit Ubuntu and run this in PowerShell:
@@ -153,7 +170,9 @@ This reloads the default zsh shell and applies Docker group membership.
   commands can find the default fnm-managed Node.js version. It also exports
   `TMPDIR=/tmp` and `COREPACK_HOME="$HOME/.cache/node/corepack"`, preventing
   Node.js, Unix tools, and Corepack from using Windows `/mnt/c/...` paths
-  inherited through `TEMP`, `TMP`, and `LOCALAPPDATA`.
+  inherited through `TEMP`, `TMP`, and `LOCALAPPDATA`. The same managed block
+  exports `PLAYWRIGHT_MCP_BROWSER=chromium` so Playwright CLI/MCP automation
+  uses Playwright-managed Chromium by default.
 - `TMPDIR` and `COREPACK_HOME` are also exported at the beginning of the
   installer, so installation steps use WSL's Linux filesystem before
   `~/.zshenv` is created. Windows-provided `TEMP`, `TMP`, and `LOCALAPPDATA`

@@ -172,6 +172,16 @@ install_fnm_and_node() {
   corepack install --global pnpm@latest
 }
 
+install_playwright() {
+  log "Installing Playwright CLI and Chromium"
+
+  # Use the active fnm-managed Node/npm as the normal WSL user so the global
+  # CLI and browser cache stay user-owned. Playwright may elevate only for
+  # official Chromium system dependencies.
+  npm install --global @playwright/cli@latest
+  playwright-cli install-browser chromium --with-deps
+}
+
 configure_zshenv() {
   log "Configuring ~/.zshenv"
   local zshenv="$HOME/.zshenv"
@@ -209,6 +219,9 @@ export TMPDIR=/tmp
 # Prevent Windows LOCALAPPDATA inherited by WSL from redirecting Corepack's
 # package-manager cache to /mnt/c. Keep it on the Linux filesystem instead.
 export COREPACK_HOME="$HOME/.cache/node/corepack"
+
+# Default Playwright CLI/MCP automation to Playwright-managed Chromium.
+export PLAYWRIGHT_MCP_BROWSER=chromium
 # <<< codex-wsl-dev-env <<<
 EOF
 
@@ -384,6 +397,7 @@ main() {
   install_system_packages
   install_starship
   install_fnm_and_node
+  install_playwright
   configure_zshenv
   configure_zshrc
   set_default_shell_to_zsh
