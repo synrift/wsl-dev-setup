@@ -115,9 +115,39 @@ RUN_DOCKER_HELLO_WORLD=1 GIT_NAME="your-name" GIT_EMAIL="you@example.com" bash -
 
 ## pnpm With Corepack
 
-The script keeps the npm version bundled with Node.js and uses Corepack to
-manage pnpm. Outside a project, Corepack provides the latest pnpm version that
-was selected during installation.
+The script keeps fnm and the npm bundled with each Node installation. In a
+project or subdirectory, fnm uses the nearest `.node-version` (or `.nvmrc`),
+automatically installing a missing runtime. Corepack uses the project's pinned
+`packageManager` without rewriting it. Outside projects, the active Node is
+preserved; a fresh shell starts with the default LTS. Corepack's bundled pnpm
+default is used outside projects, without checking for newer releases.
+
+Use `node`, `npm`, and `pnpm` normally. Manual `fnm use` and `fnm exec --using`
+overrides are preserved, including in child shells. Explicit `fnm exec` retains
+fnm's requirement that the requested Node is already installed.
+
+Initialization runs in all zsh modes, including Codex's `zsh -c`. Bash login
+and interactive shells also initialize it; child `bash -c` processes inherit
+`BASH_ENV`. A standalone Bash process launched without that environment should
+use `bash -lc`. There are no custom node/npm/npx/pnpm command proxies: a small
+helper installs a pinned, compatible Corepack and its native shims for the
+active Node. Preparation uses locks and atomic cache publication, with logs on
+stderr. Prepared tools work with read-only HOME access; fnm's temporary shell
+state lives in `/tmp`. A sandbox needs approval to download/install missing
+tools into HOME, rather than silently running another Node. If a directory
+change selects an invalid or unavailable runtime, the shell reports the failure
+and stays in the previous directory/runtime. Configured Corepack releases
+support Node 16.20.0 and newer; older Node fails explicitly instead of being
+upgraded.
+
+First use needs network access for missing Node, Corepack, and pnpm versions.
+The compatibility pins are maintained in `install.sh`, based on Corepack's
+published Node engine requirements. npm registry signing keys are cached on
+first use and refreshed atomically every 30 days when HOME is writable. Corepack
+0.20.0, used for older Node releases in the compatibility map, predates npm
+package signature verification; newer configured Corepack versions verify
+pnpm signatures using the cached registry keys. The legacy pnpm cache is warmed
+under a lock to avoid concurrent first-use races.
 
 Windows environment variables such as `LOCALAPPDATA` are inherited by WSL.
 Corepack may otherwise select a cache below `/mnt/c/Users/.../AppData/Local`,
@@ -170,10 +200,16 @@ The script installs the official Playwright coding-agent CLI globally with the
 fnm-managed npm, then installs Playwright-managed Chromium and Chromium's
 official Ubuntu dependencies.
 
-The global CLI is for AI and browser automation. Chromium is preinstalled and
-set as the default through `PLAYWRIGHT_MCP_BROWSER=chromium` in `~/.zshenv`.
-Playwright installs Linux system dependencies as part of the Chromium step.
-Browser binaries normally live under `~/.cache/ms-playwright`.
+The global CLI is for AI and browser automation and keeps the concrete Node
+runtime captured at installation when projects or the fnm default select
+another Node. Chromium is preinstalled and set as
+the default through `PLAYWRIGHT_MCP_BROWSER=chromium`. Playwright installs Linux
+system dependencies as part of the Chromium step. Browser binaries normally
+live under `~/.cache/ms-playwright`.
+
+The installer actually launches the CLI's matching Chromium and checks a page.
+Project Playwright versions can require different browser revisions and their
+own downloads; the global preinstallation does not replace those browsers.
 
 Applications should keep `@playwright/test` project-local rather than installing
 it globally.
@@ -199,13 +235,11 @@ This reloads the default zsh shell and applies Docker group membership.
   `apparmor-profiles` and `apparmor-utils`, copies the Bubblewrap profile into
   `/etc/apparmor.d`, and loads it. If AppArmor or that restriction is disabled,
   the step is skipped.
-- The script updates `~/.zshenv` so Codex Desktop and other non-interactive zsh
-  commands can find the default fnm-managed Node.js version. It also exports
-  `TMPDIR=/tmp` and `COREPACK_HOME="$HOME/.cache/node/corepack"`, preventing
-  Node.js, Unix tools, and Corepack from using Windows `/mnt/c/...` paths
-  inherited through `TEMP`, `TMP`, and `LOCALAPPDATA`. The same managed block
-  exports `PLAYWRIGHT_MCP_BROWSER=chromium` so Playwright CLI/MCP automation
-  uses Playwright-managed Chromium by default.
+- `~/.zshenv` initializes the project runtime for both interactive and
+  non-interactive zsh, rather than placing a fixed default Node on PATH.
+  Bash initialization is configured through `~/.bashrc`, `~/.profile`, and
+  inherited `BASH_ENV`. fnm uses recursive version-file lookup and does not
+  infer or upgrade Node from `engines.node`.
 - `TMPDIR` and `COREPACK_HOME` are also exported at the beginning of the
   installer, so installation steps use WSL's Linux filesystem before
   `~/.zshenv` is created. Windows-provided `TEMP`, `TMP`, and `LOCALAPPDATA`
@@ -213,6 +247,22 @@ This reloads the default zsh shell and applies Docker group membership.
 - The script updates `~/.zshrc` inside a managed block named `codex-wsl-dev-env`.
 - Re-running the script replaces only that managed block and keeps your other `~/.zshrc` content.
 - The SSH public key is printed at the end so you can add it to GitHub.
+
+## Layer 1 Verification
+
+Installation errors report stage, line, command, and exit code. The installer
+checks tools in new shells, Docker daemon availability, Compose, and actual
+Chromium startup. The isolated integration suite can be run with:
+
+```bash
+bash tests/node-environment.sh
+```
+
+It writes only to a temporary HOME under `/tmp` and downloads test runtimes.
+It covers subdirectories, nested declarations, missing tools, explicit fnm
+selection, shell inheritance, read-only HOME access, concurrency, stdout cleanliness, and failure
+before user commands execute. Current-WSL integration checks do not constitute
+a full fresh-WSL installation or reboot acceptance test.
 
 ## Layer 2: AI Tooling
 
