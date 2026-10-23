@@ -1,13 +1,12 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-# WSL Ubuntu 24.04 development environment bootstrap.
+# WSL Ubuntu 24.04 / Debian 13 development environment bootstrap.
 # Defaults are public-safe placeholders. Override them like:
 #   GIT_NAME="your-name" GIT_EMAIL="you@example.com" bash install.sh
 
 GIT_NAME="${GIT_NAME:-your-name}"
 GIT_EMAIL="${GIT_EMAIL:-you@example.com}"
-INSTALL_DOCKER="${INSTALL_DOCKER:-}"
 RUN_DOCKER_HELLO_WORLD="${RUN_DOCKER_HELLO_WORLD:-0}"
 STAGE=bootstrap
 rc=0
@@ -56,59 +55,20 @@ command_exists() {
   command -v "$1" >/dev/null 2>&1
 }
 
-choose_docker_installation() {
-  local answer="$INSTALL_DOCKER"
-
-  if [[ -z "$answer" && ! -t 0 ]]; then
-    answer=Y
-    log "No interactive input detected; Docker Engine will be installed by default"
-  fi
-
-  while true; do
-    if [[ -z "$answer" ]]; then
-      printf 'Install Docker Engine and Compose? [Y/n] ' >&2
-      if ! IFS= read -r answer; then
-        answer=Y
-      fi
-    fi
-
-    case "$answer" in
-      "" | [Yy] | 1 | [Tt][Rr][Uu][Ee])
-        INSTALL_DOCKER=1
-        return
-        ;;
-      [Nn] | 0 | [Ff][Aa][Ll][Ss][Ee])
-        INSTALL_DOCKER=0
-        if [[ "$RUN_DOCKER_HELLO_WORLD" == "1" ]]; then
-          warn "RUN_DOCKER_HELLO_WORLD=1 is ignored because Docker installation was skipped."
-        fi
-        return
-        ;;
-      *)
-        if [[ ! -t 0 ]]; then
-          die "Invalid INSTALL_DOCKER value '$answer'. Use Y/N, true/false, or 1/0."
-        fi
-        warn "Please answer Y or N."
-        answer=
-        ;;
-    esac
-  done
-}
-
-ensure_ubuntu_wsl() {
+ensure_supported_system() {
   if [[ ! -f /etc/os-release ]]; then
-    die "Cannot find /etc/os-release. Please run this inside Ubuntu on WSL."
+    die "Cannot find /etc/os-release. Use Ubuntu 24.04 or Debian 13 on WSL."
   fi
 
   # shellcheck disable=SC1091
   . /etc/os-release
-
-  if [[ "${ID:-}" != "ubuntu" ]]; then
-    die "This script is intended for Ubuntu on WSL. Detected ID=${ID:-unknown}."
-  fi
+  case "${ID:-}:${VERSION_ID:-}" in
+    ubuntu:24.04 | debian:13) ;;
+    *) die "Supported systems: Ubuntu 24.04 and Debian 13. Detected ${ID:-unknown}:${VERSION_ID:-unknown}." ;;
+  esac
 
   if [[ ! -f /proc/sys/fs/binfmt_misc/WSLInterop ]] && ! grep -qi microsoft /proc/version 2>/dev/null; then
-    warn "This does not look like WSL. Continuing because the commands are still valid for Ubuntu."
+    warn "This does not look like WSL. Continuing on ${PRETTY_NAME:-$ID}."
   fi
 }
 
@@ -117,7 +77,8 @@ ensure_sudo() {
     die "Run this script as your normal WSL user, not as root."
   fi
 
-  sudo -v
+  command_exists sudo || die "sudo is required. Ask root to install sudo and grant this user sudo access, then log in again."
+  sudo -v || die "The current user needs sudo access."
 }
 
 install_system_packages() {
@@ -765,13 +726,9 @@ verify_installation() {
   local check='set -e; command -v fnm node npm corepack pnpm playwright-cli; node --version; npm --version; corepack --version; pnpm --version; playwright-cli --version'
   # Use a project-free directory, with no inherited multishell or manual choice.
   (cd /tmp; unset FNM_MULTISHELL_PATH WSL_FNM_EXPLICIT; zsh -lc "$check"; zsh -ic "$check"; BASH_ENV="$HOME/.local/lib/wsl-dev/node-env.sh" bash -c "$check")
-  if [[ "$INSTALL_DOCKER" == "1" ]]; then
-    log "Verifying Docker daemon and Compose"
-    sudo docker info >/dev/null
-    docker compose version
-  else
-    log "Docker verification skipped by user choice"
-  fi
+  log "Verifying Docker daemon and Compose"
+  sudo docker info >/dev/null
+  docker compose version
   log "Launching installed Chromium using the global CLI's own Playwright"
   node - "$(npm root -g)/@playwright/cli" <<'EOF'
 const {createRequire} = require('node:module');
@@ -823,19 +780,23 @@ configure_git_and_ssh() {
 install_docker() {
   log "Installing Docker Engine and Compose plugin"
 
-  sudo install -m 0755 -d /etc/apt/keyrings
-  curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo tee /etc/apt/keyrings/docker.asc >/dev/null
-  sudo chmod a+r /etc/apt/keyrings/docker.asc
-
-  local codename arch
+  local codename arch distro
   # shellcheck disable=SC1091
   . /etc/os-release
-  codename="${UBUNTU_CODENAME:-$VERSION_CODENAME}"
+  case "${ID:-}" in
+    ubuntu | debian) distro="$ID" ;;
+    *) die "Unsupported Docker distribution: ${ID:-unknown}." ;;
+  esac
+  codename="${VERSION_CODENAME:?Missing VERSION_CODENAME in /etc/os-release}"
   arch="$(dpkg --print-architecture)"
+
+  sudo install -m 0755 -d /etc/apt/keyrings
+  curl -fsSL "https://download.docker.com/linux/${distro}/gpg" | sudo tee /etc/apt/keyrings/docker.asc >/dev/null
+  sudo chmod a+r /etc/apt/keyrings/docker.asc
 
   sudo tee /etc/apt/sources.list.d/docker.sources >/dev/null <<EOF
 Types: deb
-URIs: https://download.docker.com/linux/ubuntu
+URIs: https://download.docker.com/linux/${distro}
 Suites: ${codename}
 Components: stable
 Architectures: ${arch}
@@ -868,19 +829,16 @@ EOF
 }
 
 print_next_steps() {
-  local restart_reason="the default zsh shell takes effect"
-  if [[ "$INSTALL_DOCKER" == "1" ]]; then
-    restart_reason="zsh and the docker group membership take effect"
-  fi
+  local restart_reason="zsh and the docker group membership take effect"
 
   cat <<EOF
 
 Done.
 
 Recommended next steps:
-  1. Exit Ubuntu.
+  1. Exit the WSL distribution.
   2. Run this in PowerShell: wsl --shutdown
-  3. Start Ubuntu again so ${restart_reason}.
+  3. Start the WSL distribution again so ${restart_reason}.
 
 In a project (or its subdirectories), use node/npm/pnpm normally.
 The nearest .node-version selects Node; packageManager selects pnpm.
@@ -901,7 +859,7 @@ EOF
 main() {
   local step
 
-  for step in ensure_ubuntu_wsl choose_docker_installation ensure_sudo \
+  for step in ensure_supported_system ensure_sudo \
     install_system_packages install_starship \
     install_fnm_and_node install_playwright configure_zshenv configure_zshrc \
     configure_bash set_default_shell_to_zsh configure_git_and_ssh; do
@@ -909,12 +867,8 @@ main() {
     "$step"
   done
 
-  if [[ "$INSTALL_DOCKER" == "1" ]]; then
-    STAGE=install_docker
-    install_docker
-  else
-    log "Skipping Docker Engine and Compose installation"
-  fi
+  STAGE=install_docker
+  install_docker
 
   for step in configure_bubblewrap_apparmor verify_installation print_next_steps; do
     STAGE="$step"
