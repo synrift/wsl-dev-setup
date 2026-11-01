@@ -164,9 +164,8 @@ install_starship() {
 
 # This helper prepares Corepack for the ACTIVE Node. It never selects Node,
 # parses project files, or proxies node/npm/npx. Native Corepack owns pnpm.
-write_node_helpers() {
-  mkdir -p "$HOME/.local/lib/wsl-dev" "$HOME/.local/bin" "$HOME/.local/share/wsl-dev"
-  touch "$HOME/.local/share/wsl-dev/node.lock"
+write_prepare_node() {
+  mkdir -p "$HOME/.local/lib/wsl-dev"
   cat > "$HOME/.local/lib/wsl-dev/prepare-node" <<'EOF'
 #!/usr/bin/env -S BASH_ENV= bash
 set -Eeuo pipefail
@@ -184,7 +183,10 @@ node_bin="${node_path%/*}"
 # Refuse unsupported runtimes rather than silently upgrading a project's Node.
 corepack_version="$("$node_path" -e '
 const [a,b,c] = process.versions.node.split(".").map(Number);
-if (a >= 24 || a === 22 && b >= 11 || a === 20 && b >= 10) console.log("0.34.6");
+// Corepack 0.36.0 supports ^22.22.2 || ^24.15.0 || >=26.0.0.
+// This mapping opts in only at Node 26; Node 24 and 22 retain their existing pins.
+if (a >= 26) console.log("0.36.0");
+else if (a >= 24 || a === 22 && b >= 11 || a === 20 && b >= 10) console.log("0.34.6");
 else if (a === 18 && (b > 17 || b === 17 && c >= 1) || a === 23) console.log("0.31.0");
 else if (a === 21 || a === 22) console.log("0.29.4");
 else if (a > 16 || a === 16 && b >= 20) console.log("0.20.0");
@@ -295,6 +297,12 @@ case "${1:-}" in
 esac
 EOF
   chmod 755 "$HOME/.local/lib/wsl-dev/prepare-node"
+}
+
+write_node_helpers() {
+  mkdir -p "$HOME/.local/bin" "$HOME/.local/share/wsl-dev"
+  touch "$HOME/.local/share/wsl-dev/node.lock"
+  write_prepare_node
   cat > "$HOME/.local/lib/wsl-dev/node-env.sh" <<'EOF'
 # Sourced by zsh (all modes) and bash. No output on stdout during startup.
 export TMPDIR=/tmp COREPACK_HOME="$HOME/.cache/node/corepack"
@@ -858,6 +866,12 @@ EOF
 
 main() {
   local step
+
+  if [[ "${1:-}" == --write-prepare-node ]]; then
+    STAGE=write-prepare-node
+    write_prepare_node
+    return
+  fi
 
   for step in ensure_supported_system ensure_sudo \
     install_system_packages install_starship \
