@@ -96,6 +96,7 @@ install_system_packages() {
     python3 \
     ripgrep \
     unzip \
+    zenity \
     zoxide \
     zsh \
     zsh-autosuggestions \
