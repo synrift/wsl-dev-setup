@@ -1,7 +1,8 @@
 # WSL Dev Setup
 
-Windows 11 / WSL2 / Ubuntu 24.04 / Linux x86_64 development environment
-bootstrap, with zsh as the default shell.
+Windows 11 / WSL2 / Debian 13 development environment bootstrap, with zsh as
+the default shell. The installer supports Debian 13 on WSL 2 and enables
+systemd for Docker.
 
 The repository contains one installer. From a checkout, run it as your normal
 WSL user:
@@ -28,6 +29,10 @@ Running `bash install.sh` is equivalent.
 - pkg-config
 - Python 3
 - ripgrep
+- systemd
+- systemd-sysv
+- zenity (used by OpenDesign Web mode)
+- xdg-utils
 - util-linux
 - zoxide
 - zsh-autosuggestions
@@ -42,11 +47,11 @@ Running `bash install.sh` is equivalent.
 - Playwright-managed Chromium
 - Git global config
 - ed25519 SSH key
-- Docker Engine (optional, installed by default)
+- Docker Engine (required)
 - containerd (with Docker)
 - Docker Buildx plugin (with Docker)
 - Docker Compose plugin (with Docker)
-- Bubblewrap AppArmor profile when Ubuntu enables the unprivileged user
+- Bubblewrap AppArmor profile when Debian enables the unprivileged user
   namespace restriction
 - WSL-native `TMPDIR=/tmp` for Node.js and other Unix development tools
 - WSL-native `COREPACK_HOME=~/.cache/node/corepack` for Corepack and pnpm
@@ -54,7 +59,7 @@ Running `bash install.sh` is equivalent.
 
 ## Remote Installation
 
-Run this inside Ubuntu on WSL:
+Run this inside Debian 13 on WSL 2:
 
 ```bash
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/synrift/wsl-dev-setup/main/install.sh)"
@@ -83,30 +88,15 @@ GIT_NAME="your-name"
 GIT_EMAIL="you@example.com"
 ```
 
-## Optional Docker Installation and Test
+## Docker
 
-The script asks whether to install Docker Engine and Compose. Press Enter or
-answer `Y` to install them (the default); answer `N` to skip Docker. When input
-is not interactive, Docker is installed by default so existing automated usage
-does not change.
+Docker Engine and the Compose plugin are always installed. The installer
+enables systemd in WSL and enables Docker to start with the distribution. After
+installation, shut WSL down and start Debian again so systemd can start Docker
+and the Docker group membership takes effect.
 
-For unattended runs, set `INSTALL_DOCKER=0` to skip Docker or
-`INSTALL_DOCKER=1` to install it without prompting:
-
-```bash
-INSTALL_DOCKER=0 bash install.sh
-```
-
-The same option works with remote installation:
-
-```bash
-INSTALL_DOCKER=0 bash -c "$(curl -fsSL https://raw.githubusercontent.com/synrift/wsl-dev-setup/main/install.sh)"
-```
-
-When selected, the script starts and verifies the Docker daemon and shows the
-Docker Compose version, but it does not run `hello-world` by default.
-
-To run Docker's `hello-world` test too:
+The installer verifies the Docker daemon and Compose plugin. To also run
+Docker's `hello-world` smoke test:
 
 ```bash
 RUN_DOCKER_HELLO_WORLD=1 GIT_NAME="your-name" GIT_EMAIL="you@example.com" bash -c "$(curl -fsSL https://raw.githubusercontent.com/synrift/wsl-dev-setup/main/install.sh)"
@@ -197,7 +187,7 @@ corepack use pnpm@latest
 
 The script installs the official Playwright coding-agent CLI globally with the
 fnm-managed npm, then installs Playwright-managed Chromium and Chromium's
-official Ubuntu dependencies.
+official Debian dependencies.
 
 The global CLI is for AI and browser automation and keeps the concrete Node
 runtime captured at installation when projects or the fnm default select
@@ -215,22 +205,24 @@ it globally.
 
 ## After Installation
 
-After the script finishes, exit Ubuntu and run this in PowerShell:
+After the script finishes, exit Debian and run this in PowerShell:
 
 ```powershell
 wsl --shutdown
 ```
 
-Then start Ubuntu again.
+Then start Debian again.
 
-This reloads the default zsh shell and, when Docker was installed, applies
-Docker group membership.
+This starts systemd and Docker and applies the Docker group membership.
 
 ## Notes
 
 - Run the script as your normal WSL user, not as root.
 - The script may ask for your sudo password.
-- On Ubuntu 24.04, the script checks whether AppArmor is actively restricting
+- WSL 2 version 0.67.6 or newer is required for systemd. The installer enables
+  systemd in `/etc/wsl.conf`; systemd starts after the recommended
+  `wsl --shutdown` and Debian restart.
+- On Debian 13, the script checks whether AppArmor is actively restricting
   unprivileged user namespaces. Only when required, it installs
   `apparmor-profiles` and `apparmor-utils`, copies the Bubblewrap profile into
   `/etc/apparmor.d`, and loads it. If AppArmor or that restriction is disabled,
@@ -252,6 +244,6 @@ Docker group membership.
 ## Verification
 
 Installation errors report stage, line, command, and exit code. The installer
-checks tools in new shells, the Docker daemon and Compose when selected, and
-an actual Chromium launch and page load. These checks run automatically before
+checks tools in new shells, the Docker daemon and Compose, and an actual
+Chromium launch and page load. These checks run automatically before
 the installer prints its completion message.

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-# WSL Ubuntu 24.04 / Ubuntu 26.04 / Debian 13 development environment bootstrap.
+# WSL Debian 13 development environment bootstrap.
 # Defaults are public-safe placeholders. Override them like:
 #   GIT_NAME="your-name" GIT_EMAIL="you@example.com" bash install.sh
 
@@ -35,8 +35,6 @@ export TMPDIR=/tmp
 # when selecting its cache and can otherwise try to use a /mnt/c/... path.
 # Keep Corepack and its package-manager downloads on the Linux filesystem.
 export COREPACK_HOME="$HOME/.cache/node/corepack"
-
-IS_WSL=0
 
 log() {
   printf '\n\033[1;36m==> %s\033[0m\n' "$*"
@@ -73,20 +71,24 @@ command_exists() {
 
 ensure_supported_system() {
   if [[ ! -f /etc/os-release ]]; then
-    die "Cannot find /etc/os-release. Use Ubuntu 24.04, Ubuntu 26.04, or Debian 13 on WSL."
+    die "Cannot find /etc/os-release. Use Debian 13 on WSL 2."
   fi
 
   # shellcheck disable=SC1091
   . /etc/os-release
   case "${ID:-}:${VERSION_ID:-}" in
-    ubuntu:24.04 | ubuntu:26.04 | debian:13) ;;
-    *) die "Supported systems: Ubuntu 24.04, Ubuntu 26.04, and Debian 13. Detected ${ID:-unknown}:${VERSION_ID:-unknown}." ;;
+    debian:13) ;;
+    *) die "Supported system: Debian 13. Detected ${ID:-unknown}:${VERSION_ID:-unknown}." ;;
   esac
 
-  if [[ -f /proc/sys/fs/binfmt_misc/WSLInterop ]] || grep -qi microsoft /proc/version 2>/dev/null; then
-    IS_WSL=1
-  else
-    warn "This does not look like WSL. Continuing on ${PRETTY_NAME:-$ID}."
+  if [[ ! -f /proc/sys/fs/binfmt_misc/WSLInterop ]] && \
+    ! grep -qi microsoft /proc/version 2>/dev/null; then
+    die "This installer supports Debian 13 on WSL 2 only."
+  fi
+
+  if ! grep -qi WSL2 /proc/version 2>/dev/null && \
+    ! grep -qi WSL2 /proc/sys/kernel/osrelease 2>/dev/null; then
+    die "WSL 2 is required because this installer installs Docker Engine."
   fi
 }
 
@@ -120,27 +122,64 @@ install_system_packages() {
     zsh-autosuggestions \
     zsh-syntax-highlighting \
     util-linux \
-    bubblewrap
+    bubblewrap \
+    systemd \
+    systemd-sysv \
+    xdg-utils
   )
-
-  if [[ "$IS_WSL" == 1 ]]; then
-    packages+=(xdg-utils)
-    if [[ "${ID:-}:${VERSION_ID:-}" == ubuntu:24.04 ]]; then
-      packages+=(wslu)
-    fi
-  fi
 
   sudo apt install -y "${packages[@]}"
 }
 
-register_wsl_browser() {
-  if [[ "$IS_WSL" != 1 || "${ID:-}:${VERSION_ID:-}" != ubuntu:24.04 ]]; then
-    return
+configure_wsl_systemd() {
+  log "Enabling systemd for WSL"
+
+  local wsl_conf="/etc/wsl.conf"
+  local tmp
+  tmp="$(mktemp)"
+
+  if [[ -f "$wsl_conf" ]]; then
+    awk '
+      function add_systemd_setting() {
+        if (!boot_systemd_seen) print "systemd=true"
+      }
+      BEGIN { in_boot = 0; boot_seen = 0; boot_systemd_seen = 0 }
+      /^[[:space:]]*\[[^]]+\][[:space:]]*$/ {
+        if (in_boot) add_systemd_setting()
+        in_boot = ($0 ~ /^[[:space:]]*\[boot\][[:space:]]*$/)
+        if (in_boot) { boot_seen = 1; boot_systemd_seen = 0 }
+        print
+        next
+      }
+      in_boot && /^[[:space:]]*systemd[[:space:]]*=/ {
+        if (!boot_systemd_seen) {
+          print "systemd=true"
+          boot_systemd_seen = 1
+        }
+        next
+      }
+      { print }
+      END {
+        if (in_boot) add_systemd_setting()
+        if (!boot_seen) {
+          if (NR > 0) print ""
+          print "[boot]"
+          print "systemd=true"
+        }
+      }
+    ' "$wsl_conf" > "$tmp"
+  else
+    printf '[boot]\nsystemd=true\n' > "$tmp"
   fi
 
-  log "Registering wslview as the default browser for the current user"
-  command_exists wslview || die "wslview was not found after installing wslu."
-  wslview -r || die "Failed to register wslview as the default browser."
+  sudo install -m 0644 "$tmp" "$wsl_conf"
+  rm -f -- "$tmp"
+
+  if [[ "$(< /proc/1/comm)" == systemd ]]; then
+    log "systemd is already active"
+  else
+    log "systemd will start after restarting WSL"
+  fi
 }
 
 configure_bubblewrap_apparmor() {
@@ -827,13 +866,9 @@ configure_git_and_ssh() {
 install_docker() {
   log "Installing Docker Engine and Compose plugin"
 
-  local codename arch distro
+  local codename arch distro=debian
   # shellcheck disable=SC1091
   . /etc/os-release
-  case "${ID:-}" in
-    ubuntu | debian) distro="$ID" ;;
-    *) die "Unsupported Docker distribution: ${ID:-unknown}." ;;
-  esac
   codename="${VERSION_CODENAME:?Missing VERSION_CODENAME in /etc/os-release}"
   arch="$(dpkg --print-architecture)"
 
@@ -853,12 +888,10 @@ EOF
   sudo apt update
   sudo apt install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 
-  if command_exists systemctl && systemctl list-unit-files docker.service >/dev/null 2>&1; then
-    if ! sudo systemctl enable --now docker; then
-      warn "Could not start Docker with systemctl; trying service."
-      sudo service docker start || die "Failed to start Docker."
-    fi
+  if [[ "$(< /proc/1/comm)" == systemd ]]; then
+    sudo systemctl enable --now docker || die "Failed to enable or start Docker."
   else
+    sudo systemctl enable docker || die "Failed to enable Docker for the next WSL start."
     sudo service docker start || die "Failed to start Docker."
   fi
 
@@ -876,7 +909,7 @@ EOF
 }
 
 print_next_steps() {
-  local restart_reason="zsh and the docker group membership take effect"
+  local restart_reason="systemd, Docker, zsh, and docker group membership take effect"
 
   cat <<EOF
 
@@ -913,7 +946,7 @@ main() {
   fi
 
   for step in ensure_supported_system ensure_sudo \
-    install_system_packages register_wsl_browser install_starship \
+    install_system_packages configure_wsl_systemd install_starship \
     install_fnm_and_node install_playwright configure_zshenv configure_zshrc \
     configure_bash set_default_shell_to_zsh configure_git_and_ssh; do
     STAGE="$step"
