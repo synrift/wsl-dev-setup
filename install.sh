@@ -1,13 +1,27 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-# WSL Ubuntu 24.04 / Debian 13 development environment bootstrap.
+# WSL Ubuntu 24.04 / Ubuntu 26.04 / Debian 13 development environment bootstrap.
 # Defaults are public-safe placeholders. Override them like:
 #   GIT_NAME="your-name" GIT_EMAIL="you@example.com" bash install.sh
 
 GIT_NAME="${GIT_NAME:-your-name}"
 GIT_EMAIL="${GIT_EMAIL:-you@example.com}"
 RUN_DOCKER_HELLO_WORLD="${RUN_DOCKER_HELLO_WORLD:-0}"
+
+# A sudo-launched install still needs to write user configuration as the
+# invoking user. Re-exec before any HOME-based setup or package installation.
+if [[ "${BASH_SOURCE[0]:-}" == "$0" && "${EUID}" -eq 0 && \
+  -n "${SUDO_USER:-}" && "${SUDO_USER}" != root ]] && \
+  command -v sudo >/dev/null 2>&1 && id "${SUDO_USER}" >/dev/null 2>&1; then
+  script_path="$(readlink -f -- "${BASH_SOURCE[0]}")"
+  exec sudo -H -u "${SUDO_USER}" -- env \
+    "GIT_NAME=${GIT_NAME}" \
+    "GIT_EMAIL=${GIT_EMAIL}" \
+    "RUN_DOCKER_HELLO_WORLD=${RUN_DOCKER_HELLO_WORLD}" \
+    "${script_path}" "$@"
+fi
+
 STAGE=bootstrap
 rc=0
 trap 'rc=$?; printf "[error] stage=%s line=%s command=%s exit=%s\n" "$STAGE" "$LINENO" "$BASH_COMMAND" "$rc" >&2; exit "$rc"' ERR
@@ -21,6 +35,8 @@ export TMPDIR=/tmp
 # when selecting its cache and can otherwise try to use a /mnt/c/... path.
 # Keep Corepack and its package-manager downloads on the Linux filesystem.
 export COREPACK_HOME="$HOME/.cache/node/corepack"
+
+IS_WSL=0
 
 log() {
   printf '\n\033[1;36m==> %s\033[0m\n' "$*"
@@ -57,17 +73,19 @@ command_exists() {
 
 ensure_supported_system() {
   if [[ ! -f /etc/os-release ]]; then
-    die "Cannot find /etc/os-release. Use Ubuntu 24.04 or Debian 13 on WSL."
+    die "Cannot find /etc/os-release. Use Ubuntu 24.04, Ubuntu 26.04, or Debian 13 on WSL."
   fi
 
   # shellcheck disable=SC1091
   . /etc/os-release
   case "${ID:-}:${VERSION_ID:-}" in
-    ubuntu:24.04 | debian:13) ;;
-    *) die "Supported systems: Ubuntu 24.04 and Debian 13. Detected ${ID:-unknown}:${VERSION_ID:-unknown}." ;;
+    ubuntu:24.04 | ubuntu:26.04 | debian:13) ;;
+    *) die "Supported systems: Ubuntu 24.04, Ubuntu 26.04, and Debian 13. Detected ${ID:-unknown}:${VERSION_ID:-unknown}." ;;
   esac
 
-  if [[ ! -f /proc/sys/fs/binfmt_misc/WSLInterop ]] && ! grep -qi microsoft /proc/version 2>/dev/null; then
+  if [[ -f /proc/sys/fs/binfmt_misc/WSLInterop ]] || grep -qi microsoft /proc/version 2>/dev/null; then
+    IS_WSL=1
+  else
     warn "This does not look like WSL. Continuing on ${PRETTY_NAME:-$ID}."
   fi
 }
@@ -85,7 +103,7 @@ install_system_packages() {
   log "Updating apt packages and installing base tools"
   sudo apt update
   sudo apt upgrade -y
-  sudo apt install -y \
+  local -a packages=(
     build-essential \
     ca-certificates \
     curl \
@@ -103,6 +121,26 @@ install_system_packages() {
     zsh-syntax-highlighting \
     util-linux \
     bubblewrap
+  )
+
+  if [[ "$IS_WSL" == 1 ]]; then
+    packages+=(xdg-utils)
+    if [[ "${ID:-}:${VERSION_ID:-}" == ubuntu:24.04 ]]; then
+      packages+=(wslu)
+    fi
+  fi
+
+  sudo apt install -y "${packages[@]}"
+}
+
+register_wsl_browser() {
+  if [[ "$IS_WSL" != 1 || "${ID:-}:${VERSION_ID:-}" != ubuntu:24.04 ]]; then
+    return
+  fi
+
+  log "Registering wslview as the default browser for the current user"
+  command_exists wslview || die "wslview was not found after installing wslu."
+  wslview -r || die "Failed to register wslview as the default browser."
 }
 
 configure_bubblewrap_apparmor() {
@@ -875,7 +913,7 @@ main() {
   fi
 
   for step in ensure_supported_system ensure_sudo \
-    install_system_packages install_starship \
+    install_system_packages register_wsl_browser install_starship \
     install_fnm_and_node install_playwright configure_zshenv configure_zshrc \
     configure_bash set_default_shell_to_zsh configure_git_and_ssh; do
     STAGE="$step"
