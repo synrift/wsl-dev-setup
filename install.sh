@@ -383,9 +383,13 @@ write_node_helpers() {
   write_prepare_node
   cat > "$HOME/.local/lib/wsl-dev/node-env.sh" <<'EOF'
 # Sourced by zsh (all modes) and bash. No output on stdout during startup.
+# Bash login startup can source this from .bashrc, .profile, and BASH_ENV.
+# Initialize once per Bash process; child shells still initialize independently.
+if [ -n "${BASH_VERSION:-}" ] && [ "${_wsl_node_initialized_pid:-}" = "$BASHPID" ]; then
+  return 0
+fi
 export TMPDIR=/tmp COREPACK_HOME="$HOME/.cache/node/corepack"
 export COREPACK_ENABLE_DOWNLOAD_PROMPT=0 COREPACK_ENABLE_AUTO_PIN=0 COREPACK_DEFAULT_TO_LATEST=0
-export PLAYWRIGHT_MCP_BROWSER=chromium
 export BASH_ENV="$HOME/.local/lib/wsl-dev/node-env.sh"
 # fnm exec prepends a concrete installation bin; preserve its explicit context.
 _wsl_inherited_node=$(command -v node 2>/dev/null || true)
@@ -663,6 +667,9 @@ else
   pushd() { _wsl_node_navigate pushd "$@"; }
   popd() { _wsl_node_navigate popd "$@"; }
 fi
+if [ -n "${BASH_VERSION:-}" ]; then
+  _wsl_node_initialized_pid=$BASHPID
+fi
 EOF
 }
 
@@ -680,31 +687,6 @@ install_fnm_and_node() {
   # Outside projects use Corepack's pinned built-in default, never pnpm@latest.
   COREPACK_DEFAULT_TO_LATEST=0 COREPACK_ENABLE_AUTO_PIN=0 \
     COREPACK_ENABLE_DOWNLOAD_PROMPT=0 pnpm --version
-}
-
-install_playwright() {
-  log "Installing Playwright CLI and Chromium"
-
-  # Use the active fnm-managed Node/npm as the normal WSL user so the global
-  # CLI and browser cache stay user-owned. Playwright may elevate only for
-  # official Chromium system dependencies.
-  npm install --global @playwright/cli@latest
-  playwright-cli install-browser chromium --with-deps
-  write_playwright_launcher
-}
-
-write_playwright_launcher() {
-  local node_path cli_path
-  node_path="$(node -p 'require("node:fs").realpathSync(process.execPath)')"
-  cli_path="$(realpath -e "$(npm root -g)/@playwright/cli/playwright-cli.js")" || \
-    die "The global Playwright CLI entry point could not be resolved."
-  [[ -x "$node_path" && -f "$cli_path" ]] || die "The global Playwright CLI runtime is incomplete."
-  cat > "$HOME/.local/bin/playwright-cli" <<'EOF'
-#!/usr/bin/env -S BASH_ENV= bash
-# Global automation CLI owns its bootstrap runtime; projects own their Playwright.
-EOF
-  printf 'exec %q %q "$@"\n' "$node_path" "$cli_path" >> "$HOME/.local/bin/playwright-cli"
-  chmod 755 "$HOME/.local/bin/playwright-cli"
 }
 
 configure_zshenv() {
@@ -809,28 +791,12 @@ configure_bash() {
 
 verify_installation() {
   log "Verifying tools in new interactive and non-interactive shells"
-  local check='set -e; command -v fnm node npm corepack pnpm playwright-cli; node --version; npm --version; corepack --version; pnpm --version; playwright-cli --version'
+  local check='set -e; command -v fnm node npm corepack pnpm; node --version; npm --version; corepack --version; pnpm --version'
   # Use a project-free directory, with no inherited multishell or manual choice.
   (cd /tmp; unset FNM_MULTISHELL_PATH WSL_FNM_EXPLICIT; zsh -lc "$check"; zsh -ic "$check"; BASH_ENV="$HOME/.local/lib/wsl-dev/node-env.sh" bash -c "$check")
   log "Verifying Docker daemon and Compose"
   sudo docker info >/dev/null
   docker compose version
-  log "Launching installed Chromium using the global CLI's own Playwright"
-  node - "$(npm root -g)/@playwright/cli" <<'EOF'
-const {createRequire} = require('node:module');
-const path = require('node:path');
-const cliRequire = createRequire(path.join(process.argv[2], 'package.json'));
-(async () => {
-  const {chromium} = cliRequire('playwright-core');
-  const browser = await chromium.launch({headless: true});
-  try {
-    const page = await browser.newPage();
-    await page.setContent('<title>WSL Chromium check</title>');
-    if (await page.title() !== 'WSL Chromium check') throw new Error('Chromium page check failed');
-    console.log('Chromium launch OK:', browser.version());
-  } finally { await browser.close(); }
-})().catch(error => { console.error(error); process.exitCode = 1; });
-EOF
 }
 
 set_default_shell_to_zsh() {
@@ -920,11 +886,24 @@ Recommended next steps:
   2. Run this in PowerShell: wsl --shutdown
   3. Start the WSL distribution again so ${restart_reason}.
 
+After restarting, run these inside Debian as your normal user (without sudo):
+  ps -p 1 -o comm=
+  systemctl is-active docker
+  docker info
+  docker compose version
+  command -v node npm corepack pnpm
+  node --version
+  corepack --version
+  pnpm --version
+Expect systemd as PID 1, Docker active, and all commands to succeed.
+
 In a project (or its subdirectories), use node/npm/pnpm normally.
 The nearest .node-version selects Node; packageManager selects pnpm.
 Missing Node/Corepack/pnpm downloads require network access on first use.
 Manual fnm use / fnm exec overrides are preserved.
-Project Playwright versions may require their own browser downloads.
+Playwright is project-local; this installer does not install its npm packages,
+browsers, or Agent Skills. Follow the README Playwright section after installing
+a project's dependencies.
 
 Your SSH public key:
 EOF
@@ -947,7 +926,7 @@ main() {
 
   for step in ensure_supported_system ensure_sudo \
     install_system_packages configure_wsl_systemd install_starship \
-    install_fnm_and_node install_playwright configure_zshenv configure_zshrc \
+    install_fnm_and_node configure_zshenv configure_zshrc \
     configure_bash set_default_shell_to_zsh configure_git_and_ssh; do
     STAGE="$step"
     "$step"
