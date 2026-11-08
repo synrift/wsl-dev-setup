@@ -43,6 +43,8 @@ Running `bash install.sh` is equivalent.
 - npm bundled with Node.js
 - Corepack
 - Corepack-managed pnpm
+- Playwright CLI
+- Playwright-managed Chromium
 - Git global config
 - ed25519 SSH key
 - Docker Engine (required)
@@ -53,6 +55,7 @@ Running `bash install.sh` is equivalent.
   namespace restriction
 - WSL-native `TMPDIR=/tmp` for Node.js and other Unix development tools
 - WSL-native `COREPACK_HOME=~/.cache/node/corepack` for Corepack and pnpm
+- Playwright-managed Chromium as the default via `PLAYWRIGHT_MCP_BROWSER`
 
 ## Remote Installation
 
@@ -182,62 +185,23 @@ corepack use pnpm@latest
 
 ## Playwright
 
-Playwright belongs to each project, not the base WSL environment. This installer
-is intended for a fresh Debian installation: it does not install Playwright npm
-packages, download browsers, install Agent Skills, or remove existing tools.
-It also does not install Codex or OpenCode themselves.
+The script installs the official Playwright coding-agent CLI globally with the
+fnm-managed npm, then installs Playwright-managed Chromium and Chromium's
+official Debian dependencies.
 
-Keep `@playwright/test` as an exact project development dependency and commit the
-lockfile. It supplies the `playwright` command, browser automation library, and
-`playwright cli` agent interface; no global `@playwright/cli` installation is
-needed. These CLI instructions were checked against Playwright 1.64.1.
+The global CLI is for AI and browser automation and keeps the concrete Node
+runtime captured at installation when projects or the fnm default select
+another Node. Chromium is preinstalled and set as
+the default through `PLAYWRIGHT_MCP_BROWSER=chromium`. Playwright installs Linux
+system dependencies as part of the Chromium step. Browser binaries normally
+live under `~/.cache/ms-playwright`.
 
-After cloning a project, run its documented setup. For a package that directly
-declares `@playwright/test`, the basic commands are:
+The installer actually launches the CLI's matching Chromium and checks a page.
+Project Playwright versions can require different browser revisions and their
+own downloads; the global preinstallation does not replace those browsers.
 
-```bash
-corepack pnpm install --frozen-lockfile
-corepack pnpm exec playwright install --with-deps chromium
-corepack pnpm exec playwright cli -s=review open http://localhost:3000 --browser=chromium
-corepack pnpm exec playwright cli -s=review snapshot
-corepack pnpm exec playwright cli -s=review close
-```
-
-Start the application separately before opening its URL. In a monorepo, run
-`pnpm exec` in the package that declares the dependency, or use the project's
-root scripts / `--filter` to select that package. Run E2E through the project's
-documented test script and service setup, rather than assuming a generic test
-command can prepare its database and application servers.
-
-Chromium and its Linux dependencies are installed by the project's Playwright
-version. Browser binaries normally share `~/.cache/ms-playwright`; different
-projects can require different revisions. Keep the default cache location and
-re-run the browser installation after upgrading Playwright. Do not force a
-browser executable from another version or from Windows.
-
-### Shared browser Skill for Codex and OpenCode
-
-After the first project's dependencies are installed, run this once in the
-package that declares `@playwright/test`:
-
-```bash
-corepack pnpm exec playwright cli install --skills=agents --global
-```
-
-This uses the project's local CLI to copy its bundled official browser Skill
-and references into `~/.agents/skills/playwright-cli/`. Here `--global` means
-user-level Skill placement only: it does not install a global npm package,
-download a browser, or initialize the project's `.playwright` directory.
-Codex and compatible OpenCode versions discover this shared Skill location.
-Start a new agent session after installing it.
-
-Keep the official Skill unchanged and install it only in that shared location.
-The Skill already supports local `playwright cli` commands. A project's
-`AGENTS.md` should specify its exact local command or package script, require
-`--browser=chromium` when opening a browser, and prohibit falling back to a
-global installation. Do not automatically overwrite the shared Skill from
-every project's dependency installation. When deliberately updating it, use a
-chosen project version and check compatibility with other projects.
+Applications should keep `@playwright/test` project-local rather than installing
+it globally.
 
 ## After Installation
 
@@ -258,15 +222,17 @@ ps -p 1 -o comm=
 systemctl is-active docker
 docker info
 docker compose version
-command -v node npm corepack pnpm
+command -v node npm corepack pnpm playwright-cli
 node --version
 corepack --version
 pnpm --version
+playwright-cli --version
 ```
 
 The first command should print `systemd`, Docker should report `active`, and
 all commands should succeed. Running `docker info` without `sudo` checks that
-the new Docker group membership has taken effect.
+the new Docker group membership has taken effect. Chromium's actual launch
+and page-load check runs during installation.
 
 ## Notes
 
@@ -299,7 +265,6 @@ the new Docker group membership has taken effect.
 ## Verification
 
 Installation errors report stage, line, command, and exit code. The installer
-checks Node/npm/Corepack/pnpm in new shells and verifies the Docker daemon
-and Compose. These checks run automatically before the installer prints its
-completion message. Browser installation and browser smoke tests belong to
-each project's setup and acceptance checks.
+checks tools in new shells, the Docker daemon and Compose, and an actual
+Chromium launch and page load. These checks run automatically before
+the installer prints its completion message.
