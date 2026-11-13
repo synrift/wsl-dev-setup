@@ -48,7 +48,7 @@ class StarshipConfiguration(unittest.TestCase):
         self.assertNotIn('PROMPT_MODE', rc)  # No inherited variable needed at startup.
         for name in ('.zshrc', '.zshenv', '.local/lib/wsl-dev/node-env.sh'):
             subprocess.run(['zsh', '-n', str(self.home / name)], check=True)
-        subprocess.run(['bash', '-n', str(self.home / '.local/lib/wsl-dev/prepare-node')], check=True)
+        subprocess.run(['bash', '-n', str(self.home / '.local/lib/wsl-dev/node-env.sh')], check=True)
 
     def test_installation_verifies_starship_and_noninteractive_zsh(self):
         bin_dir = self.home / '.local/bin'
@@ -97,4 +97,3 @@ verify_installation
 
 if __name__ == '__main__':
     unittest.main()
-

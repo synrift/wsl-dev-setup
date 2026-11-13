@@ -119,39 +119,54 @@ RUN_DOCKER_HELLO_WORLD=1 GIT_NAME="your-name" GIT_EMAIL="you@example.com" bash -
 
 ## pnpm With Corepack
 
-The script keeps fnm and the npm bundled with each Node installation. In a
-project or subdirectory, fnm uses the nearest `.node-version` (or `.nvmrc`),
-automatically installing a missing runtime. Corepack uses the project's pinned
-`packageManager` without rewriting it. Outside projects, the active Node is
-preserved; a fresh shell starts with the default LTS. Corepack's bundled pnpm
-default is used outside projects, without checking for newer releases.
+The installer prepares the initial Node LTS with the official Corepack npm
+package and `corepack enable`. Shell startup only initializes fnm and selects
+an **already installed** Node using recursive `.node-version` / `.nvmrc`
+lookup. It does not install Node, prepare Corepack, read signing-key caches,
+or repair package-manager links. `engines.node` does not select a Node version.
 
-Use `node`, `npm`, and `pnpm` normally. Manual `fnm use` and `fnm exec --using`
-overrides are preserved, including in child shells. Explicit `fnm exec` retains
-fnm's requirement that the requested Node is already installed.
+zsh uses fnm's official directory-change hook, including in `zsh -c` commands.
+Bash selects Node at startup; after changing projects in an existing Bash,
+run `fnm use` explicitly. No custom `fnm`, `cd`, `pushd`, or `popd` wrappers,
+installation locks, compatibility maps, or periodic signing-key refreshes are
+installed. Corepack uses its own signature verification and cache management.
+The existing environment flags prevent automatic packageManager edits and
+latest-version lookups; project-pinned pnpm may still download on first use.
 
-Initialization runs in all zsh modes, including Codex's `zsh -c`. Bash login
-and interactive shells also initialize it; child `bash -c` processes inherit
-`BASH_ENV`. A standalone Bash process launched without that environment should
-use `bash -lc`. There are no custom node/npm/npx/pnpm command proxies: a small
-helper installs a pinned, compatible Corepack and its native shims for the
-active Node. Preparation uses locks and atomic cache publication, with logs on
-stderr. Prepared tools work with read-only HOME access; fnm's temporary shell
-state lives in `/tmp`. A sandbox needs approval to download/install missing
-tools into HOME, rather than silently running another Node. If a directory
-change selects an invalid or unavailable runtime, the shell reports the failure
-and stays in the previous directory/runtime. Configured Corepack releases
-support Node 16.20.0 and newer; older Node fails explicitly instead of being
-upgraded.
+Prepare a newly required Node before starting your agent. For example, for a
+project declaring Node 22 or 24, from its root:
 
-First use needs network access for missing Node, Corepack, and pnpm versions.
-The compatibility pins are maintained in `install.sh`, based on Corepack's
-published Node engine requirements. npm registry signing keys are cached on
-first use and refreshed atomically every 30 days when HOME is writable. Corepack
-0.20.0, used for older Node releases in the compatibility map, predates npm
-package signature verification; newer configured Corepack versions verify
-pnpm signatures using the cached registry keys. The legacy pnpm cache is warmed
-under a lock to avoid concurrent first-use races.
+```bash
+fnm install
+fnm use
+npm install --global --engine-strict corepack@latest
+corepack enable
+pnpm install
+```
+
+For older Node releases, select a Corepack version compatible with that Node
+instead of `corepack@latest`; the installer no longer maintains a legacy
+compatibility table. A Node installation normally needs Corepack setup once;
+different projects can still select different pnpm versions via `packageManager`.
+
+A new shell selects its own project's Node (or the fnm default), including
+non-interactive `zsh -c` and Bash with inherited `BASH_ENV`. An independently
+launched Bash without `BASH_ENV` should use `bash -lc`. A missing declared Node
+stops startup before the task runs and must be installed explicitly; startup
+never downloads it. Use an already prepared directory to open a setup shell,
+or `zsh -f` to bypass user startup when repairing the environment.
+
+Manual `fnm use` and `fnm exec --using` use native behavior. There is no custom
+manual-version inheritance across fresh shells. On a directory change, fnm's
+native zsh hook reports errors but does not restore directories or guarantee
+that a chained command stops. Prepare project versions first; when changing
+to an unprepared project, use `cd project && fnm use && <command>` explicitly.
+A CLI environment snapshot or disabled startup files can also bypass fresh
+project selection; verify `node --version` when changing projects inside an agent.
+
+The script installs development dependencies, not Codex or Cursor. Their
+official standalone installers can be used independently of project npm globals.
+Orca and actual CLI behavior must still be checked on your Windows/WSL setup.
 
 Windows environment variables such as `LOCALAPPDATA` are inherited by WSL.
 Corepack may otherwise select a cache below `/mnt/c/Users/.../AppData/Local`,
@@ -266,8 +281,8 @@ and page-load check runs during installation.
   Bash initialization is configured through `~/.bashrc`, `~/.profile`, and
   inherited `BASH_ENV`. The Node helper initializes only once per Bash process,
   including when a login shell reads multiple startup files; child Bash shells
-  initialize independently. fnm uses recursive version-file lookup and does not
-  infer or upgrade Node from `engines.node`.
+  select their own project independently. fnm uses recursive version-file lookup
+  and does not infer or upgrade Node from `engines.node`.
 - `TMPDIR` and `COREPACK_HOME` are also exported at the beginning of the
   installer, so installation steps use WSL's Linux filesystem before
   `~/.zshenv` is created. Windows-provided `TEMP`, `TMP`, and `LOCALAPPDATA`
@@ -288,7 +303,17 @@ the installer prints its completion message.
 
 Run `bash -n install.sh`, `shellcheck install.sh`, and
 `python3 -m unittest discover -s tests -v` (requires Bash, zsh, and Python 3).
-The isolated tests exercise generated startup configuration,
-package selection and shell loading without installing system packages. They
-do not replace installation and agent/terminal checks on Debian 13 / WSL 2.
+The isolated tests exercise generated startup configuration, package selection
+and shell loading without installing system packages. For real runtime checks,
+provide a fnm binary, an fnm directory with prepared Node 22 and 24 installations,
+and an optional already warmed Corepack cache:
 
+```bash
+FNM_TEST_BIN=/path/to/fnm FNM_TEST_DIR=/path/to/fnm-data \
+  FNM_TEST_PNPM_CACHE=/path/to/corepack-cache \
+  PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -v
+```
+
+These checks never download tools. Without the test variables, real runtime
+checks are skipped. They do not replace full installation or actual Orca/CLI
+checks on Debian 13 / WSL 2.

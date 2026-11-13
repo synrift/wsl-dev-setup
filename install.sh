@@ -239,151 +239,12 @@ install_starship() {
   "$HOME/.local/bin/starship" preset pastel-powerline -o "$HOME/.config/starship.toml" >/dev/null
 }
 
-# This helper prepares Corepack for the ACTIVE Node. It never selects Node,
-# parses project files, or proxies node/npm/npx. Native Corepack owns pnpm.
-write_prepare_node() {
-  mkdir -p "$HOME/.local/lib/wsl-dev"
-  cat > "$HOME/.local/lib/wsl-dev/prepare-node" <<'EOF'
-#!/usr/bin/env -S BASH_ENV= bash
-set -Eeuo pipefail
-stage=corepack-bootstrap
-rc=0
-trap 'rc=$?; printf "[error] stage=%s line=%s command=%s exit=%s\n" "$stage" "$LINENO" "$BASH_COMMAND" "$rc" >&2; exit "$rc"' ERR
-export TMPDIR=/tmp
-export COREPACK_HOME="$HOME/.cache/node/corepack"
-export COREPACK_ENABLE_DOWNLOAD_PROMPT=0
-export COREPACK_ENABLE_AUTO_PIN=0
-export COREPACK_DEFAULT_TO_LATEST=0
-node_path="$(node -p 'process.execPath')"
-node_bin="${node_path%/*}"
-# Pins and engines: github.com/nodejs/corepack/blob/v<VERSION>/package.json.
-# Refuse unsupported runtimes rather than silently upgrading a project's Node.
-corepack_version="$("$node_path" -e '
-const [a,b,c] = process.versions.node.split(".").map(Number);
-// Corepack 0.36.0 supports ^22.22.2 || ^24.15.0 || >=26.0.0.
-// This mapping opts in only at Node 26; Node 24 and 22 retain their existing pins.
-if (a >= 26) console.log("0.36.0");
-else if (a >= 24 || a === 22 && b >= 11 || a === 20 && b >= 10) console.log("0.34.6");
-else if (a === 18 && (b > 17 || b === 17 && c >= 1) || a === 23) console.log("0.31.0");
-else if (a === 21 || a === 22) console.log("0.29.4");
-else if (a > 16 || a === 16 && b >= 20) console.log("0.20.0");
-else { console.error("Unsupported Node " + process.version + " for configured Corepack releases; Node was not changed."); process.exit(1); }
-')"
-cache="$HOME/.local/share/wsl-dev/corepack"
-package="$cache/$corepack_version/node_modules/corepack"
-keys_fresh=0
-if [[ -f "$cache/npm-keys.json" ]]; then
-  keys_age=$(( $(date +%s) - $(stat -c %Y "$cache/npm-keys.json") ))
-  if (( keys_age < 2592000 )); then keys_fresh=1; fi
-fi
-# Prepared tools must work when Codex permits only read access to HOME.
-if [[ -f "$cache/npm-keys.json" && ( "$keys_fresh" == 1 || ! -w "$cache" ) && \
-      -f "$package/dist/corepack.js" && \
-      -x "$node_bin/corepack" && -x "$node_bin/pnpm" && \
-      "$(readlink "$node_bin/corepack" || true)" == "$package/dist/corepack.js" && \
-      "$(readlink -f "$node_bin/pnpm" || true)" == "$package/dist/pnpm.js" ]]; then
-  export COREPACK_INTEGRITY_KEYS
-  COREPACK_INTEGRITY_KEYS="$(cat "$cache/npm-keys.json")"
-  # Corepack 0.20's package-manager cache replacement is not atomic. Warm the
-  # selected pnpm while holding our lock so simultaneous Node 16 shells cannot
-  # race on a cold package-manager cache.
-  if [[ "$corepack_version" == 0.20.0 ]]; then
-    stage=corepack-pnpm-cache
-    if [[ -w "$cache" ]]; then
-      exec 9> "$cache/prepare.lock"
-      flock 9
-      "$node_bin/pnpm" --version >&2
-      flock -u 9
-      exec 9>&-
-    else
-      "$node_bin/pnpm" --version >&2
-    fi
-  fi
-  if [[ "${1:-}" == --run ]]; then
-    shift
-    export BASH_ENV="$HOME/.local/lib/wsl-dev/node-env.sh"
-    exec "$@"
-  fi
-  exit 0
-fi
-mkdir -p "$cache"
-# One lock covers install/publication/shims. Never keep it during user commands.
-exec 9> "$cache/prepare.lock"
-flock 9
-# Refresh registry keys every 30 days while holding the cache lock. Keep the
-# previous valid file if a scheduled refresh cannot reach the registry.
-keys_refresh=1
-if [[ -f "$cache/npm-keys.json" ]]; then
-  keys_age=$(( $(date +%s) - $(stat -c %Y "$cache/npm-keys.json") ))
-  if (( keys_age < 2592000 )); then keys_refresh=0; fi
-fi
-if [[ "$keys_refresh" == 1 ]]; then
-  if [[ -f "$cache/npm-keys.json" ]]; then
-    stage=corepack-keys-refresh
-  else
-    stage=corepack-keys
-  fi
-  key_scratch="$(mktemp "$cache/.keys.XXXXXX")"
-  trap 'rm -rf -- "${scratch:-}" "${key_scratch:-}"' EXIT
-  if curl -fsSL --retry 3 https://registry.npmjs.org/-/npm/v1/keys | \
-    jq -e '{npm: .keys} | select(.npm | type == "array" and length > 0)' > "$key_scratch"; then
-    mv "$key_scratch" "$cache/npm-keys.json"
-    key_scratch=
-  else
-    keys_rc=$?
-    rm -f -- "$key_scratch"
-    key_scratch=
-    if [[ -s "$cache/npm-keys.json" ]]; then
-      printf '[warn] stage=corepack-keys-refresh line=%s command=curl/jq exit=%s; using cached signing keys\n' "$LINENO" "$keys_rc" >&2
-    else
-      printf '[error] stage=corepack-keys line=%s command=curl/jq exit=%s\n' "$LINENO" "$keys_rc" >&2
-      exit "$keys_rc"
-    fi
-  fi
-fi
-package="$cache/$corepack_version/node_modules/corepack"
-if [[ ! -f "$package/dist/corepack.js" ]]; then
-  stage=corepack-install
-  scratch="$(mktemp -d "$cache/.install.XXXXXX")"
-  trap 'rm -rf -- "${scratch:-}"' EXIT
-  "$node_path" "$node_bin/../lib/node_modules/npm/bin/npm-cli.js" install \
-    --prefix "$scratch" --engine-strict --ignore-scripts --no-audit --no-fund \
-    --package-lock=false "corepack@$corepack_version" >&2
-  mv "$scratch" "$cache/$corepack_version"
-  scratch=
-fi
-export COREPACK_INTEGRITY_KEYS
-# Corepack 0.20 predates npm signing-key verification; newer pinned releases
-# receive the current registry keys and verify package-manager signatures.
-COREPACK_INTEGRITY_KEYS="$(cat "$cache/npm-keys.json")"
-stage=corepack-enable
-if [[ "$(readlink "$node_bin/corepack" || true)" != "$package/dist/corepack.js" ]]; then
-  ln -sfn "$package/dist/corepack.js" "$node_bin/corepack"
-fi
-if [[ ! -x "$node_bin/pnpm" || "$(readlink -f "$node_bin/pnpm")" != "$package/dist/pnpm.js" ]]; then
-  "$node_path" "$package/dist/corepack.js" enable --install-directory "$node_bin" pnpm >&2
-fi
-if [[ "$corepack_version" == 0.20.0 ]]; then
-  stage=corepack-pnpm-cache
-  "$node_bin/pnpm" --version >&2
-fi
-flock -u 9
-exec 9>&-
-case "${1:-}" in
-  --run) shift; export BASH_ENV="$HOME/.local/lib/wsl-dev/node-env.sh"; exec "$@" ;;
-esac
-EOF
-  chmod 755 "$HOME/.local/lib/wsl-dev/prepare-node"
-}
-
+# Only initialize/select an installed Node. Package-manager preparation belongs
+# to installation or an explicit project setup step, never shell startup.
 write_node_helpers() {
-  mkdir -p "$HOME/.local/bin" "$HOME/.local/share/wsl-dev"
-  touch "$HOME/.local/share/wsl-dev/node.lock"
-  write_prepare_node
+  mkdir -p "$HOME/.local/lib/wsl-dev"
   cat > "$HOME/.local/lib/wsl-dev/node-env.sh" <<'EOF'
-# Sourced by zsh (all modes) and bash. No output on stdout during startup.
-# Bash login startup can source this from .bashrc, .profile, and BASH_ENV.
-# Initialize once per Bash process; child shells still initialize independently.
+# Shared by zsh (including -c), Bash startup files, and inherited BASH_ENV.
 if [ -n "${BASH_VERSION:-}" ] && [ "${_wsl_node_initialized_pid:-}" = "$BASHPID" ]; then
   return 0
 fi
@@ -391,282 +252,21 @@ export TMPDIR=/tmp COREPACK_HOME="$HOME/.cache/node/corepack"
 export COREPACK_ENABLE_DOWNLOAD_PROMPT=0 COREPACK_ENABLE_AUTO_PIN=0 COREPACK_DEFAULT_TO_LATEST=0
 export PLAYWRIGHT_MCP_BROWSER=chromium
 export BASH_ENV="$HOME/.local/lib/wsl-dev/node-env.sh"
-# fnm exec prepends a concrete installation bin; preserve its explicit context.
-_wsl_inherited_node=$(command -v node 2>/dev/null || true)
-case "$_wsl_inherited_node" in
-  "${FNM_DIR:-$HOME/.local/share/fnm}"/node-versions/*/installation/bin/node) export WSL_FNM_EXPLICIT=1 ;;
-esac
-_wsl_inherited_version=
-if [ "${WSL_FNM_EXPLICIT:-0}" = 1 ]; then
-  _wsl_inherited_version=$(node --version) || exit $?
-fi
 export PATH="$HOME/.local/share/fnm:$HOME/.local/bin:$PATH"
+
+# Native zsh hooks also handle `cd project && ...` inside agent commands.
+# Error-only logging keeps fnm's version messages out of command stdout.
 if [ -n "${ZSH_VERSION:-}" ]; then
-  _wsl_fnm_env=$(XDG_RUNTIME_DIR=/tmp command fnm env --shell zsh --version-file-strategy recursive --resolve-engines=false) || exit $?
-  eval "$_wsl_fnm_env"
+  _wsl_fnm_env=$(XDG_RUNTIME_DIR=/tmp command fnm env --shell zsh --use-on-cd --log-level error --version-file-strategy recursive --resolve-engines=false) || exit $?
 else
   _wsl_fnm_env=$(XDG_RUNTIME_DIR=/tmp command fnm env --shell bash --version-file-strategy recursive --resolve-engines=false) || exit $?
-  eval "$_wsl_fnm_env"
 fi
-_wsl_node_select() {
-  local dir declared=0 rc
-  # fnm resolves version files against the real directory. Match that when
-  # the shell entered through a symlink, including links to project children.
-  dir=$(pwd -P) || return $?
-  while :; do
-    if [ -f "$dir/.node-version" ] || [ -f "$dir/.nvmrc" ]; then declared=1; break; fi
-    [ "$dir" = / ] && break
-    dir=${dir%/*}; [ -n "$dir" ] || dir=/
-  done
-  if [ "$declared" = 1 ]; then
-    # Native recursive lookup, with serialized first installation.
-    # Open the existing lock read-only: flock itself does not alter the file.
-    if flock -x "$HOME/.local/share/wsl-dev/node.lock" fnm use --install-if-missing >&2; then
-      :
-    else
-      rc=$?
-      printf '[error] stage=node-select line=%s command=fnm use --install-if-missing exit=%s\n' "$LINENO" "$rc" >&2
-      return "$rc"
-    fi
-    unset WSL_FNM_EXPLICIT
-  elif [ ! -x "$FNM_MULTISHELL_PATH/bin/node" ]; then
-    if command fnm use default >&2; then
-      :
-    else
-      rc=$?
-      printf '[error] stage=node-select line=%s command=fnm use default exit=%s\n' "$LINENO" "$rc" >&2
-      return "$rc"
-    fi
-  fi
-  if "$HOME/.local/lib/wsl-dev/prepare-node"; then
-    :
-  else
-    rc=$?
-    printf '[error] stage=node-prepare line=%s command=prepare-node exit=%s\n' "$LINENO" "$rc" >&2
-    return "$rc"
-  fi
-  export COREPACK_INTEGRITY_KEYS
-  if COREPACK_INTEGRITY_KEYS=$(cat "$HOME/.local/share/wsl-dev/corepack/npm-keys.json"); then
-    :
-  else
-    rc=$?
-    printf '[error] stage=corepack-keys line=%s command=cat npm-keys.json exit=%s\n' "$LINENO" "$rc" >&2
-    return "$rc"
-  fi
-}
-# fnm remains the native version manager. Only successful manual `use` gets
-# an inheritance marker; `exec` keeps native option/version parsing below.
-fnm() {
-  local action= rc
-  local -a global_opts=() exec_opts=()
-  # fnm's global flags can precede the subcommand. Keep them native while
-  # locating explicit `use` / `exec` invocations that need a child marker.
-  while [ "$#" -gt 0 ]; do
-    case "$1" in
-      --fnm-dir|--log-level|--arch|--node-dist-mirror|--version-file-strategy)
-        [ "$#" -ge 2 ] || { command fnm "${global_opts[@]}" "$@"; return; }
-        global_opts+=("$1" "$2"); shift 2 ;;
-      --resolve-engines)
-        shift
-        if [ "${1:-}" = true ] || [ "${1:-}" = false ]; then
-          global_opts+=("--resolve-engines=$1"); shift
-        else
-          global_opts+=(--resolve-engines=true)
-        fi ;;
-      --fnm-dir=*|--log-level=*|--arch=*|--node-dist-mirror=*|--version-file-strategy=*|--resolve-engines=*)
-        global_opts+=("$1"); shift ;;
-      --corepack-enabled)
-        global_opts+=("$1"); shift ;;
-      -h|--help|-V|--version)
-        command fnm "${global_opts[@]}" "$@"; return ;;
-      -*) command fnm "${global_opts[@]}" "$@"; return ;;
-      *) action=$1; shift; break ;;
-    esac
-  done
-  [ -n "$action" ] || { command fnm "${global_opts[@]}" "$@"; return; }
-  if [ "$action" = exec ]; then
-    while [ "$#" -gt 0 ]; do
-      case "$1" in
-        --using|--fnm-dir|--log-level|--arch|--node-dist-mirror|--version-file-strategy)
-          [ "$#" -ge 2 ] || { command fnm "${global_opts[@]}" exec "${exec_opts[@]}" "$@"; return; }
-          exec_opts+=("$1" "$2"); shift 2 ;;
-        --resolve-engines)
-          shift
-          if [ "${1:-}" = true ] || [ "${1:-}" = false ]; then
-            exec_opts+=("--resolve-engines=$1"); shift
-          else
-            # fnm's option takes an optional value. Use the explicit form so
-            # our injected helper cannot be mistaken for that value.
-            exec_opts+=(--resolve-engines=true)
-          fi ;;
-        --using=*|--fnm-dir=*|--log-level=*|--arch=*|--node-dist-mirror=*|--version-file-strategy=*|--resolve-engines=*)
-          exec_opts+=("$1"); shift ;;
-        --corepack-enabled|--using-file) exec_opts+=("$1"); shift ;;
-        --) shift; break ;;
-        -*) command fnm "${global_opts[@]}" exec "${exec_opts[@]}" "$@"; return ;;
-        *) break ;;
-      esac
-    done
-    [ "$#" -gt 0 ] || { command fnm "${global_opts[@]}" exec "${exec_opts[@]}"; return; }
-    WSL_FNM_EXPLICIT=1 command fnm "${global_opts[@]}" exec "${exec_opts[@]}" "$HOME/.local/lib/wsl-dev/prepare-node" --run "$@"
-    return
-  fi
-  if [ "$action" = use ]; then
-    if flock -x "$HOME/.local/share/wsl-dev/node.lock" fnm "${global_opts[@]}" use "$@"; then
-      rc=0
-    else
-      rc=$?
-    fi
-  else
-    if command fnm "${global_opts[@]}" "$action" "$@"; then
-      rc=0
-    else
-      rc=$?
-    fi
-  fi
-  [ "$rc" = 0 ] || return "$rc"
-  if [ "$action" = use ]; then
-    export WSL_FNM_EXPLICIT=1
-    "$HOME/.local/lib/wsl-dev/prepare-node" || return
-    export COREPACK_INTEGRITY_KEYS
-    COREPACK_INTEGRITY_KEYS=$(cat "$HOME/.local/share/wsl-dev/corepack/npm-keys.json") || return
-  fi
-}
-if [ -n "$_wsl_inherited_version" ]; then
-  command fnm use "$_wsl_inherited_version" >&2 || exit $?
-  "$HOME/.local/lib/wsl-dev/prepare-node" || exit $?
-  export COREPACK_INTEGRITY_KEYS
-  COREPACK_INTEGRITY_KEYS=$(cat "$HOME/.local/share/wsl-dev/corepack/npm-keys.json") || exit $?
-else
-  _wsl_node_select || { _wsl_rc=$?; exit "$_wsl_rc"; }
-fi
-unset _wsl_inherited_node _wsl_inherited_version _wsl_fnm_env
-if [ -n "${ZSH_VERSION:-}" ]; then
-  _wsl_node_restoring_dir=0
-  _wsl_node_chpwd_ran=0
-  _wsl_node_chpwd_status=0
-  _wsl_node_chpwd_select() {
-    [ "${_wsl_node_restoring_dir:-0}" = 1 ] && return 0
-    _wsl_node_chpwd_ran=1
-    local old_dir="${1:-${OLDPWD:-}}" failed_dir="$PWD" old_version old_explicit old_rc
-    old_version=$(command node --version 2>/dev/null || true)
-    old_explicit="${WSL_FNM_EXPLICIT:-}"
-    if _wsl_node_select; then
-      _wsl_node_chpwd_status=0
-      return 0
-    else
-      old_rc=$?
-    fi
-    _wsl_node_chpwd_status=$old_rc
-    if [ -n "$old_dir" ] && [ -d "$old_dir" ] && [ "$old_dir" != "$PWD" ]; then
-      printf '[error] stage=node-select line=%s command=cd\ %s exit=%s; restoring %s\n' "$LINENO" "$failed_dir" "$old_rc" "$old_dir" >&2
-      _wsl_node_restoring_dir=1
-      builtin cd -- "$old_dir" >/dev/null 2>&1 || true
-      _wsl_node_restoring_dir=0
-    fi
-    # Preparation can fail after fnm switched Node even when `cd .` leaves
-    # the directory unchanged. Restore the runtime and manual choice too.
-    if [ -n "$old_version" ]; then
-      flock -x "$HOME/.local/share/wsl-dev/node.lock" fnm use "$old_version" >&2 || true
-    fi
-    if [ -n "$old_explicit" ]; then export WSL_FNM_EXPLICIT="$old_explicit"; else unset WSL_FNM_EXPLICIT; fi
-    return "$old_rc"
-  }
-  _wsl_node_check_navigation() {
-    local old_dir="$1"
-    if [ "$_wsl_node_chpwd_ran" = 1 ]; then
-      return "$_wsl_node_chpwd_status"
-    fi
-    [ "$PWD" != "$old_dir" ] || return 0
-    _wsl_node_chpwd_select || return $?
-    return 0
-  }
-  cd() {
-    local old_dir="$PWD"
-    _wsl_node_chpwd_ran=0
-    _wsl_node_chpwd_status=0
-    builtin cd "$@" || return
-    if [ "$_wsl_node_chpwd_ran" = 1 ]; then
-      local rc="$_wsl_node_chpwd_status"
-      _wsl_node_chpwd_ran=0
-      return "$rc"
-    fi
-    _wsl_node_chpwd_select "$old_dir"
-  }
-  pushd() {
-    local old_dir="$PWD" rc navigation_rc
-    local -a old_stack=("${dirstack[@]}")
-    _wsl_node_chpwd_ran=0
-    _wsl_node_chpwd_status=0
-    if builtin pushd "$@"; then navigation_rc=0; else return $?; fi
-    if _wsl_node_check_navigation "$old_dir"; then
-      return "$navigation_rc"
-    else
-      rc=$?
-      if [ "$PWD" != "$old_dir" ]; then
-        _wsl_node_restoring_dir=1
-        builtin cd -- "$old_dir" >/dev/null 2>&1 || true
-        _wsl_node_restoring_dir=0
-      fi
-      dirstack=("${old_stack[@]}")
-      return "$rc"
-    fi
-  }
-  popd() {
-    local old_dir="$PWD" rc navigation_rc
-    local -a old_stack=("${dirstack[@]}")
-    _wsl_node_chpwd_ran=0
-    _wsl_node_chpwd_status=0
-    if builtin popd "$@"; then navigation_rc=0; else return $?; fi
-    if _wsl_node_check_navigation "$old_dir"; then
-      return "$navigation_rc"
-    else
-      rc=$?
-      if [ "$PWD" != "$old_dir" ]; then
-        _wsl_node_restoring_dir=1
-        builtin cd -- "$old_dir" >/dev/null 2>&1 || true
-        _wsl_node_restoring_dir=0
-      fi
-      dirstack=("${old_stack[@]}")
-      return "$rc"
-    fi
-  }
-  autoload -Uz add-zsh-hook
-  add-zsh-hook -d chpwd _wsl_node_select _wsl_node_chpwd_select 2>/dev/null || true
-  add-zsh-hook chpwd _wsl_node_chpwd_select
-else
-  # Bash has no chpwd hook. Check every directory-changing builtin, and keep
-  # its directory stack intact when project preparation fails.
-  _wsl_node_navigate() {
-    local action="$1" old_dir="$PWD" old_version old_explicit failed_dir rc i
-    local -a old_stack=("${DIRSTACK[@]}")
-    shift
-    old_version=$(command node --version 2>/dev/null || true)
-    old_explicit="${WSL_FNM_EXPLICIT:-}"
-    builtin "$action" "$@" || return
-    if [ "$action" != cd ] && [ "$PWD" = "$old_dir" ]; then return 0; fi
-    if _wsl_node_select; then
-      return 0
-    else
-      rc=$?
-    fi
-    failed_dir="$PWD"
-    builtin cd -- "$old_dir" >/dev/null 2>&1 || true
-    builtin dirs -c
-    for ((i=${#old_stack[@]}-1; i>0; i--)); do
-      builtin pushd -n -- "${old_stack[i]}" >/dev/null
-    done
-    if [ -n "$old_version" ]; then
-      flock -x "$HOME/.local/share/wsl-dev/node.lock" fnm use "$old_version" >&2 || true
-    fi
-    if [ -n "$old_explicit" ]; then export WSL_FNM_EXPLICIT="$old_explicit"; else unset WSL_FNM_EXPLICIT; fi
-    printf '[error] stage=node-select line=%s command=%s\ %s exit=%s; restored %s\n' "$LINENO" "$action" "$failed_dir" "$rc" "$old_dir" >&2
-    return "$rc"
-  }
-  cd() { _wsl_node_navigate cd "$@"; }
-  pushd() { _wsl_node_navigate pushd "$@"; }
-  popd() { _wsl_node_navigate popd "$@"; }
-fi
+eval "$_wsl_fnm_env"
+unset _wsl_fnm_env
+# Use native recursive lookup/default selection, with no download prompt or
+# auto-install. Exit on a missing version, including when Bash reads this file
+# directly through BASH_ENV (return alone would still allow the task to run).
+command fnm use --silent-if-unchanged </dev/null >&2 || exit $?
 if [ -n "${BASH_VERSION:-}" ]; then
   _wsl_node_initialized_pid=$BASHPID
 fi
@@ -683,7 +283,9 @@ install_fnm_and_node() {
   fnm default lts-latest
   fnm use default
   write_node_helpers
-  "$HOME/.local/lib/wsl-dev/prepare-node"
+  # Official Corepack package and native shims for the initial LTS only.
+  npm install --global --engine-strict corepack@latest
+  corepack enable
   # Outside projects use Corepack's pinned built-in default, never pnpm@latest.
   COREPACK_DEFAULT_TO_LATEST=0 COREPACK_ENABLE_AUTO_PIN=0 \
     COREPACK_ENABLE_DOWNLOAD_PROMPT=0 pnpm --version
@@ -936,8 +538,9 @@ Expect systemd as PID 1, Docker active, and all commands to succeed.
 
 In a project (or its subdirectories), use node/npm/pnpm normally.
 The nearest .node-version selects Node; packageManager selects pnpm.
-Missing Node/Corepack/pnpm downloads require network access on first use.
-Manual fnm use / fnm exec overrides are preserved.
+For a new Node version, run fnm install / fnm use, then install compatible
+Corepack and run corepack enable. Shell startup never installs or repairs tools.
+fnm use / fnm exec use native fnm behavior; new shells select their own project.
 Project Playwright versions may require their own browser downloads.
 
 EOF
@@ -952,12 +555,6 @@ EOF
 
 main() {
   local step
-
-  if [[ "${1:-}" == --write-prepare-node ]]; then
-    STAGE=write-prepare-node
-    write_prepare_node
-    return
-  fi
 
   for step in ensure_supported_system ensure_sudo \
     install_system_packages configure_wsl_systemd install_starship \
@@ -980,4 +577,3 @@ main() {
 if [[ "${BASH_SOURCE[0]:-}" == "$0" || -z "${BASH_SOURCE[0]:-}" ]]; then
   main "$@"
 fi
-
