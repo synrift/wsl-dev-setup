@@ -8,8 +8,6 @@ set -Eeuo pipefail
 GIT_NAME="${GIT_NAME:-your-name}"
 GIT_EMAIL="${GIT_EMAIL:-you@example.com}"
 RUN_DOCKER_HELLO_WORLD="${RUN_DOCKER_HELLO_WORLD:-0}"
-# Select the interactive UI; runtime initialization is shared by both modes.
-PROMPT_MODE="${PROMPT_MODE-starship}"
 
 # A sudo-launched install still needs to write user configuration as the
 # invoking user. Re-exec before any HOME-based setup or package installation.
@@ -21,7 +19,6 @@ if [[ "${BASH_SOURCE[0]:-}" == "$0" && "${EUID}" -eq 0 && \
     "GIT_NAME=${GIT_NAME}" \
     "GIT_EMAIL=${GIT_EMAIL}" \
     "RUN_DOCKER_HELLO_WORLD=${RUN_DOCKER_HELLO_WORLD}" \
-    "PROMPT_MODE=${PROMPT_MODE}" \
     "${script_path}" "$@"
 fi
 
@@ -70,13 +67,6 @@ die() {
 
 command_exists() {
   command -v "$1" >/dev/null 2>&1
-}
-
-validate_prompt_mode() {
-  case "$PROMPT_MODE" in
-    warp|starship) ;;
-    *) die "PROMPT_MODE must be warp or starship (received: ${PROMPT_MODE})." ;;
-  esac
 }
 
 ensure_supported_system() {
@@ -135,9 +125,7 @@ install_system_packages() {
     xdg-utils
   )
 
-  if [[ "$PROMPT_MODE" == starship ]]; then
-    packages+=(zsh-autosuggestions zsh-syntax-highlighting)
-  fi
+  packages+=(zsh-autosuggestions zsh-syntax-highlighting)
 
   sudo apt install -y "${packages[@]}"
 }
@@ -238,11 +226,6 @@ configure_bubblewrap_apparmor() {
 }
 
 install_starship() {
-  if [[ "$PROMPT_MODE" == warp ]]; then
-    log "Using Warp prompt; skipping Starship"
-    return
-  fi
-
   log "Installing Starship"
   mkdir -p "$HOME/.local/bin"
 
@@ -780,24 +763,10 @@ configure_zshrc() {
 autoload -Uz compinit
 compinit
 
-
-EOF
-
-  if [[ "$PROMPT_MODE" == starship ]]; then
-    cat >> "$tmp" <<'EOF'
 if command -v starship >/dev/null 2>&1; then
   eval "$(starship init zsh)"
 fi
-EOF
-  else
-    cat >> "$tmp" <<'EOF'
-# Warp renders its built-in prompt; keep a basic shell prompt as a fallback.
-PROMPT='%n@%m:%~%# '
-RPROMPT=''
-EOF
-  fi
 
-  cat >> "$tmp" <<'EOF'
 alias gs="git status"
 alias ga="git add"
 alias gaa="git add --all"
@@ -817,12 +786,6 @@ alias la="ls -lAh --color=auto"
 alias ll="ls -lh --color=auto"
 alias lsa="ls -lah --color=auto"
 
-EOF
-
-  # Warp owns its input editor, suggestions, and highlighting. These ZLE
-  # plugins remain part of the traditional Starship installation only.
-  if [[ "$PROMPT_MODE" == starship ]]; then
-    cat >> "$tmp" <<'EOF'
 if [ -f /usr/share/zsh-autosuggestions/zsh-autosuggestions.zsh ]; then
   source /usr/share/zsh-autosuggestions/zsh-autosuggestions.zsh
 fi
@@ -831,7 +794,6 @@ if [ -f /usr/share/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh ]; then
   source /usr/share/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh
 fi
 EOF
-  fi
   printf '%s\n' "$end" >> "$tmp"
 
   mv "$tmp" "$zshrc"
@@ -846,10 +808,8 @@ configure_bash() {
 }
 
 verify_installation() {
-  if [[ "$PROMPT_MODE" == starship ]]; then
-    log "Verifying Starship"
-    "$HOME/.local/bin/starship" --version
-  fi
+  log "Verifying Starship"
+  "$HOME/.local/bin/starship" --version
   log "Verifying tools in new interactive and non-interactive shells"
   local check='set -e; command -v fnm node npm corepack pnpm playwright-cli; node --version; npm --version; corepack --version; pnpm --version; playwright-cli --version'
   # Use a project-free directory, with no inherited multishell or manual choice.
@@ -955,7 +915,7 @@ print_next_steps() {
 
   cat <<EOF
 
-Done. Prompt mode: ${PROMPT_MODE}.
+Done. Starship prompt configured.
 
 Recommended next steps:
   1. Exit the WSL distribution.
@@ -982,12 +942,6 @@ Project Playwright versions may require their own browser downloads.
 
 EOF
 
-  if [[ "$PROMPT_MODE" == warp ]]; then
-    printf '\nIn Warp settings, select the built-in Warp prompt. zsh still executes commands.\n'
-  else
-    printf '\nIn Warp, select Shell prompt if you want to display Starship.\n'
-  fi
-
   printf '\nYour SSH public key:\n'
   if [[ -f "$HOME/.ssh/id_ed25519.pub" ]]; then
     cat "$HOME/.ssh/id_ed25519.pub"
@@ -1005,7 +959,7 @@ main() {
     return
   fi
 
-  for step in validate_prompt_mode ensure_supported_system ensure_sudo \
+  for step in ensure_supported_system ensure_sudo \
     install_system_packages configure_wsl_systemd install_starship \
     install_fnm_and_node install_playwright configure_zshenv configure_zshrc \
     configure_bash set_default_shell_to_zsh configure_git_and_ssh; do
@@ -1026,3 +980,4 @@ main() {
 if [[ "${BASH_SOURCE[0]:-}" == "$0" || -z "${BASH_SOURCE[0]:-}" ]]; then
   main "$@"
 fi
+

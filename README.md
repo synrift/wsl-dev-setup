@@ -13,50 +13,16 @@ WSL user:
 
 Running `bash install.sh` is equivalent.
 
-## Prompt Mode
+## Shell Configuration
 
-This installer targets a fresh Debian 13 / WSL 2 installation. Choose a mode
-once when installing; the default remains `starship`:
+The installer configures Starship with the `pastel-powerline` preset and loads
+`zsh-autosuggestions` and `zsh-syntax-highlighting`. There is one prompt
+configuration, with no terminal-specific mode selection.
 
-```bash
-PROMPT_MODE=warp ./install.sh
-# Or use the original Starship environment:
-PROMPT_MODE=starship ./install.sh
-```
+zoxide is not installed or initialized; use normal shell navigation (`cd`,
+`pushd`, `popd`).
 
-For a remote installation, set the variable on the installing Bash process:
-
-```bash
-PROMPT_MODE=warp GIT_NAME="your-name" GIT_EMAIL="you@example.com" bash -c "$(curl -fsSL https://raw.githubusercontent.com/synrift/wsl-dev-setup/main/install.sh)"
-```
-
-Only `warp` and `starship` are accepted; invalid or empty values fail before
-system installation. The selection is baked into the generated `.zshrc`, so
-future terminals and agents do not need to inherit `PROMPT_MODE`.
-
-| Component | `warp` | `starship` (default) |
-| --- | --- | --- |
-| zsh, default shell, `compinit`, aliases | Installed/configured | Installed/configured |
-| Starship and its preset | Not installed or initialized | Installed and initialized |
-| zsh-autosuggestions / zsh-syntax-highlighting | Not installed or loaded | Installed and loaded |
-| Node, fnm, npm, Corepack, pnpm, Docker, Playwright, other base tools | Same shared setup | Same shared setup |
-
-In Warp, select its built-in **Warp prompt** for `warp` mode. For Starship in
-Warp, select **Shell prompt**. The installer does not change the Windows Warp
-application settings. Warp supplies the terminal input UI; zsh still executes
-commands. The two omitted plugins enhance zsh's traditional line editor and are
-not required by agent commands. `compinit` remains available for shell-native
-completion; Warp's own completion UI may behave differently.
-
-The intended workflow is Warp connected to WSL, running Codex CLI and Cursor
-CLI inside WSL; Cursor IDE integrated-terminal access is outside this setup.
-Warp mode retains a basic shell prompt as a fallback. This is an
-installation-wide choice, not automatic per-terminal switching.
-zoxide is not installed or initialized in either mode; use normal shell
-navigation (`cd`, `pushd`, `popd`).
-No terminal detection or changes to Warp's shell integration hooks are added.
-
-Both modes keep `.zshenv` runtime initialization for `zsh -c`, as well as the
+The `.zshenv` runtime initialization supports `zsh -c`, as well as the
 existing Bash login/interactive initialization and inherited `BASH_ENV` path.
 An independently launched Bash without `BASH_ENV` should still use `bash -lc`.
 Agent shell options that disable startup files (such as `zsh -f`) can bypass
@@ -84,9 +50,9 @@ install Codex, Cursor, or OpenDesign themselves.
 - zenity (used by OpenDesign Web mode)
 - xdg-utils
 - util-linux
-- zsh-autosuggestions (Starship mode)
-- zsh-syntax-highlighting (Starship mode)
-- Starship prompt (Starship mode)
+- zsh-autosuggestions
+- zsh-syntax-highlighting
+- Starship prompt
 - fnm
 - Node.js LTS
 - npm bundled with Node.js
@@ -314,7 +280,7 @@ and page-load check runs during installation.
 ## Verification
 
 Installation errors report stage, line, command, and exit code. The installer
-checks tools in new shells, the Docker daemon and Compose, and an actual
+checks the Starship version, tools in new shells (including `zsh -c`), the Docker daemon and Compose, and an actual
 Chromium launch and page load. These checks run automatically before
 the installer prints its completion message.
 
@@ -322,6 +288,7 @@ the installer prints its completion message.
 
 Run `bash -n install.sh`, `shellcheck install.sh`, and
 `python3 -m unittest discover -s tests -v` (requires Bash, zsh, and Python 3).
-The isolated tests exercise mode selection, generated startup configuration,
+The isolated tests exercise generated startup configuration,
 package selection and shell loading without installing system packages. They
 do not replace installation and agent/terminal checks on Debian 13 / WSL 2.
+
